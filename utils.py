@@ -249,20 +249,23 @@ def normalize_sparse_array(A,relative_threshold=0.001,minimum_nonzero_entries=50
     ]).T
 
 def fun_wrapper(fun,x,p):
-  if np.isscalar(p):
-    return fun(x,p)
-  if p.shape[-1] == 2:
-    return fun(x,p[...,0],p[...,1])
-  if p.shape[-1] == 3:
-    return fun(x,p[...,0],p[...,1],p[...,2])
-  if p.shape[-1] == 4:
-    return fun(x,p[...,0],p[...,1],p[...,2],p[...,3])
-  if p.shape[-1] == 5:
-    return fun(x,p[...,0],p[...,1],p[...,2],p[...,3],p[...,4])
-  if p.shape[-1] == 6:
-    return fun(x,p[...,0],p[...,1],p[...,2],p[...,3],p[...,4],p[...,5])
-  if p.shape[-1] == 7:
-    return fun(x,p[...,0],p[...,1],p[...,2],p[...,3],p[...,4],p[...,5],p[...,6])
+    '''
+      
+    '''
+    if np.isscalar(p):
+      return fun(x,p)
+    if p.shape[-1] == 2:
+      return fun(x,p[...,0],p[...,1])
+    if p.shape[-1] == 3:
+      return fun(x,p[...,0],p[...,1],p[...,2])
+    if p.shape[-1] == 4:
+      return fun(x,p[...,0],p[...,1],p[...,2],p[...,3])
+    if p.shape[-1] == 5:
+      return fun(x,p[...,0],p[...,1],p[...,2],p[...,3],p[...,4])
+    if p.shape[-1] == 6:
+      return fun(x,p[...,0],p[...,1],p[...,2],p[...,3],p[...,4],p[...,5])
+    if p.shape[-1] == 7:
+      return fun(x,p[...,0],p[...,1],p[...,2],p[...,3],p[...,4],p[...,5],p[...,6])
 
 
 
