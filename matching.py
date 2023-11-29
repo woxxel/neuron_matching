@@ -214,7 +214,7 @@ class matching:
         s_ref = 0
         for (s,self.currentPath) in self.progress:
             self.data[s] = copy.deepcopy(self.data_blueprint)
-            self.data[s].filePath = self.currentPath
+            # self.data[s].filePath = self.currentPath
 
             self.A = self.load_footprints(s,store_data=True)
 
@@ -477,14 +477,14 @@ class matching:
             c_max_T,_ = calculate_img_correlation(Cn_ref,Cn.T,plot_bool=False)
 
             ##  if no good alignment is found, don't include this session in the matching procedure (e.g. if imaging window is shifted too much)
-            if (c_max > self.para['min_session_correlation']) & \
-              (c_max_T > self.para['min_session_correlation']):
+            if (c_max < self.para['min_session_correlation']) & \
+              (c_max_T < self.para['min_session_correlation']):
                 print('skipping %s (correlation c=%5.3g too low)'%(self.currentPath,c_max))
                 return False
 
-            if (c_max_T > c_max) & (c_max_T > self.para['min_session_correlation']):
-                print('Transposed image in %s'%self.currentPath)
-                A = sp.sparse.hstack([img.reshape(self.para['dims']).transpose().reshape(-1,1) for img in A.transpose()])
+            # if (c_max_T > c_max) & (c_max_T > self.para['min_session_correlation']):
+            #     print('Transposed image in %s'%self.currentPath)
+            #     self.A = sp.sparse.hstack([img.reshape(self.para['dims']).transpose().reshape(-1,1) for img in self.A.transpose()])
             
             ## calculate rigid shift and optical flow from reduced (cumulative) footprint arrays
             (x_shift,y_shift),flow,(x_grid,y_grid),_ = get_shift_and_flow(A_ref,self.A,self.para['dims'],projection=1,plot_bool=False)

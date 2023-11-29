@@ -1,0 +1,83 @@
+digraph G {
+concentrate=true;
+splines="ortho";
+rankdir="LR";
+subgraph legend{
+    rank = min;
+    label = "legend";
+    Legend [shape=none, margin=0, label = <
+        <table cellspacing="0" cellpadding="0" border="1"><tr><td>Code2flow Legend</td></tr><tr><td>
+        <table cellspacing="0">
+        <tr><td>Regular function</td><td width="50px" bgcolor='#cccccc'></td></tr>
+        <tr><td>Trunk function (nothing calls this)</td><td bgcolor='#966F33'></td></tr>
+        <tr><td>Leaf function (this calls nothing else)</td><td bgcolor='#6db33f'></td></tr>
+        <tr><td>Function call</td><td><font color='black'>&#8594;</font></td></tr>
+        </table></td></tr></table>
+        >];
+}node_5f4a45b0 [label="2069: add_number()" name="matching::add_number" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_f10c02f0 [label="1816: RoC()" name="matching::matching.RoC" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_b66c5f28 [label="49: __init__()" name="matching::matching.__init__" shape="rect" style="rounded,filled" fillcolor="#966F33" ];
+node_e6a70f9a [label="196: build_model()" name="matching::matching.build_model" shape="rect" style="rounded,filled" fillcolor="#cccccc" ];
+node_178e4311 [label="377: calculate_p()" name="matching::matching.calculate_p" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_c3b30e39 [label="517: calculate_statistics()" name="matching::matching.calculate_statistics" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_6e2a4ad9 [label="676: fit_model()" name="matching::matching.fit_model" shape="rect" style="rounded,filled" fillcolor="#cccccc" ];
+node_3c1f942f [label="412: load_footprints()" name="matching::matching.load_footprints" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_6e7a59bd [label="971: load_model()" name="matching::matching.load_model" shape="rect" style="rounded,filled" fillcolor="#966F33" ];
+node_a14c467a [label="1165: plot_model()" name="matching::matching.plot_model" shape="rect" style="rounded,filled" fillcolor="#966F33" ];
+node_4bbee2a6 [label="638: position_kde()" name="matching::matching.position_kde" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_0702fd04 [label="450: prepare_footprints()" name="matching::matching.prepare_footprints" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_57427888 [label="260: register_neurons()" name="matching::matching.register_neurons" shape="rect" style="rounded,filled" fillcolor="#cccccc" ];
+node_8cee9c71 [label="184: run_matching()" name="matching::matching.run_matching" shape="rect" style="rounded,filled" fillcolor="#966F33" ];
+node_328e228c [label="957: save_model()" name="matching::matching.save_model" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_1c69cfb5 [label="982: save_registration()" name="matching::matching.save_registration" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_d1de183d [label="880: set_functions()" name="matching::matching.set_functions" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_b952093e [label="162: update_bins()" name="matching::matching.update_bins" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_7edf2104 [label="573: update_joint_model()" name="matching::matching.update_joint_model" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_442dc7a7 [label="2043: mean_of_trunc_lognorm()" name="matching::mean_of_trunc_lognorm" shape="rect" style="rounded,filled" fillcolor="#6db33f" ];
+node_b66c5f28 -> node_b952093e [color="#000000" penwidth="2"];
+node_e6a70f9a -> node_c3b30e39 [color="#56B4E9" penwidth="2"];
+node_e6a70f9a -> node_c3b30e39 [color="#56B4E9" penwidth="2"];
+node_e6a70f9a -> node_6e2a4ad9 [color="#56B4E9" penwidth="2"];
+node_e6a70f9a -> node_3c1f942f [color="#56B4E9" penwidth="2"];
+node_e6a70f9a -> node_4bbee2a6 [color="#56B4E9" penwidth="2"];
+node_e6a70f9a -> node_0702fd04 [color="#56B4E9" penwidth="2"];
+node_e6a70f9a -> node_328e228c [color="#56B4E9" penwidth="2"];
+node_e6a70f9a -> node_7edf2104 [color="#56B4E9" penwidth="2"];
+node_e6a70f9a -> node_7edf2104 [color="#56B4E9" penwidth="2"];
+node_6e2a4ad9 -> node_d1de183d [color="#E69F00" penwidth="2"];
+node_6e2a4ad9 -> node_d1de183d [color="#E69F00" penwidth="2"];
+node_6e2a4ad9 -> node_d1de183d [color="#E69F00" penwidth="2"];
+node_6e2a4ad9 -> node_d1de183d [color="#E69F00" penwidth="2"];
+node_6e2a4ad9 -> node_d1de183d [color="#E69F00" penwidth="2"];
+node_6e7a59bd -> node_b952093e [color="#0072B2" penwidth="2"];
+node_a14c467a -> node_5f4a45b0 [color="#56B4E9" penwidth="2"];
+node_a14c467a -> node_5f4a45b0 [color="#56B4E9" penwidth="2"];
+node_a14c467a -> node_5f4a45b0 [color="#56B4E9" penwidth="2"];
+node_a14c467a -> node_5f4a45b0 [color="#56B4E9" penwidth="2"];
+node_a14c467a -> node_f10c02f0 [color="#56B4E9" penwidth="2"];
+node_a14c467a -> node_442dc7a7 [color="#56B4E9" penwidth="2"];
+node_a14c467a -> node_442dc7a7 [color="#56B4E9" penwidth="2"];
+node_57427888 -> node_178e4311 [color="#000000" penwidth="2"];
+node_57427888 -> node_c3b30e39 [color="#000000" penwidth="2"];
+node_57427888 -> node_3c1f942f [color="#000000" penwidth="2"];
+node_57427888 -> node_3c1f942f [color="#000000" penwidth="2"];
+node_57427888 -> node_0702fd04 [color="#000000" penwidth="2"];
+node_57427888 -> node_0702fd04 [color="#000000" penwidth="2"];
+node_57427888 -> node_1c69cfb5 [color="#000000" penwidth="2"];
+node_8cee9c71 -> node_e6a70f9a [color="#E69F00" penwidth="2"];
+node_8cee9c71 -> node_57427888 [color="#E69F00" penwidth="2"];
+subgraph cluster_a87d1752 {
+    node_442dc7a7 node_5f4a45b0;
+    label="File: matching";
+    name="matching";
+    style="filled";
+    graph[style=dotted];
+    subgraph cluster_e7d9a946 {
+        node_b66c5f28 node_b952093e node_8cee9c71 node_e6a70f9a node_57427888 node_178e4311 node_3c1f942f node_0702fd04 node_c3b30e39 node_7edf2104 node_4bbee2a6 node_6e2a4ad9 node_d1de183d node_328e228c node_6e7a59bd node_1c69cfb5 node_a14c467a node_f10c02f0;
+        label="Class: matching";
+        name="matching";
+        style="filled";
+        graph[style=dotted];
+    };
+};
+}
