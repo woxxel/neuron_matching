@@ -28,7 +28,7 @@ from scipy.optimize import curve_fit, linear_sum_assignment
 
 import matplotlib.pyplot as plt
 from matplotlib import rc
-# from matplotlib import animation
+from matplotlib import animation
 # from matplotlib import cm
 import matplotlib.colors as mcolors
 
@@ -162,23 +162,30 @@ class matching:
     def update_bins(self,nbins):
         
         self.para['nbins'] = nbins
+        self.para['arrays'] = self.build_arrays(nbins)
         
+        
+
+    def build_arrays(self,nbins):
+       
         ## create value arrays for distance and footprint correlation
-        self.para['arrays'] = {}
-        self.para['arrays']['distance_bounds'] = np.linspace(0,self.para['neighbor_distance'],nbins+1)#[:-1]
-        self.para['arrays']['correlation_bounds'] = np.linspace(0,1,nbins+1)#[:-1]
+        arrays = {}
+        arrays['distance_bounds'] = np.linspace(0,self.para['neighbor_distance'],nbins+1)#[:-1]
+        arrays['correlation_bounds'] = np.linspace(0,1,nbins+1)#[:-1]
 
-        self.para['arrays']['distance_step'] = self.para['neighbor_distance']/nbins
-        self.para['arrays']['correlation_step'] = 1./nbins
+        arrays['distance_step'] = self.para['neighbor_distance']/nbins
+        arrays['correlation_step'] = 1./nbins
 
 
-        self.para['arrays']['distance'] = self.para['arrays']['distance_bounds'][:-1] + self.para['arrays']['distance_step']/2
-        self.para['arrays']['correlation'] = self.para['arrays']['correlation_bounds'][:-1] + self.para['arrays']['correlation_step']/2
+        arrays['distance'] = arrays['distance_bounds'][:-1] + arrays['distance_step']/2
+        arrays['correlation'] = arrays['correlation_bounds'][:-1] + arrays['correlation_step']/2
 
 
         ## update histogram counts (if nbins_new < nbins), merge counts, otherwise split evenly
-        self.log.warning('implement method to update count histograms!')
-
+        # self.log.warning('implement method to update count histograms!')
+        return arrays
+       
+       
 
     
     def run_matching(self,p_thr=0.5):
@@ -1008,7 +1015,54 @@ class matching:
 
     ### ------------------- PLOTTING FUNCTIONS --------------------- ###
 
-    def plot_fit_results(self,n=10,dim='correlation',model='joint',pop='nNN'):
+    '''
+      this specifies the different plot functions:
+
+        all plots have inputs sv, suffix to specify saving behavior
+
+        1. plot_fit_results
+            inputs:
+              model
+              times
+            creates interactive plot of joint model results
+        
+        2. plot_model
+            creates general overview of model results and matching performance compared to guess based on nearest neighbours
+
+        3. plot_fit_parameters
+          MERGE THIS INTO #1
+
+        4. plot_count_histogram
+            inputs:
+              times
+            plots the histogram for different populations in 2- and 3D
+
+        5. plot_something
+            plots 3D visualization of matching probability
+        
+        6. plot_matches
+            inputs:
+              s_ref
+              s
+            plots neuron footprints of 2 sessions, colorcoded by whether they are matched, or not
+        
+        7. plot_neuron_numbers
+            shows sessions in which each neuron is active
+            ADJUST ACCORDING TO PLOTTING SCRIPT TO SHOW PHD LIKE FIGURE
+
+        8. plot_registration
+            shows distribution of match probabilities and 2nd best probability per match (how much "confusion" could there be?)
+
+
+
+        
+              
+          
+        
+    '''
+
+
+    def plot_fit_results(self,model='joint',times=1,sv=False,suffix=''):
       
       '''
         TODO:
@@ -1019,8 +1073,12 @@ class matching:
       
       key_counts = 'counts' if self.para['model']=='shifted' else 'counts_unshifted'
       counts = self.model[key_counts]
+      
+      nbins = int(self.para['nbins']/2**times)
+      print(nbins)
+      counts = scale_down_counts(self.model[key_counts],times)
 
-      nbins = self.para['nbins']
+      # nbins = self.para['nbins']/2**times
       joint_hist_norm_dist = counts/counts.sum(0) * nbins/self.para['neighbor_distance']
       joint_hist_norm_corr = counts/counts.sum(1)[:,np.newaxis,:] * nbins
       
@@ -1038,15 +1096,15 @@ class matching:
 
       for i,(pop,col) in enumerate(zip(['NN','nNN'],['g','r'])):
         h['distance'][pop], = ax[0][1].plot(
-            self.para['arrays']['distance'],
-            np.zeros(self.para['nbins']),
+            self.para['arrays']['distance'][::2**times],
+            np.zeros(nbins),
             c=col
           )
         
         h['distance_hist'][pop] = ax[0][1].bar(
-           self.para['arrays']['distance'],
+           self.para['arrays']['distance'][::2*times],
            joint_hist_norm_dist[:,0,i+1],
-           width=self.para['arrays']['distance_step'],
+           width=self.para['arrays']['distance_step']*2**times,
            facecolor=col,
            alpha=0.5,
         )
@@ -1055,22 +1113,22 @@ class matching:
 
       for pop,col in zip(['NN','nNN'],['g','r']):
         h['correlation'][pop], = ax[1][0].plot(
-          self.para['arrays']['correlation'],
-          np.zeros(self.para['nbins']),
+          self.para['arrays']['correlation'][::2*times],
+          np.zeros(nbins),
           color=col
         )
 
         h['correlation_hist'][pop] = ax[1][0].bar(
-           self.para['arrays']['correlation'],
+           self.para['arrays']['correlation'][::2*times],
            joint_hist_norm_corr[:,0,i+1],
-           width=self.para['arrays']['correlation_step'],
+           width=self.para['arrays']['correlation_step']*2**times,
            facecolor=col,
            alpha=0.5,
         )
       plt.setp(ax[1][0],ylim=[0,2])
       
       ax[1][1].imshow(
-         self.model['counts'][...,0],
+         counts[...,0],
          origin='lower',aspect='auto',
          extent=tuple(self.para['arrays']['correlation'][[0,-1]])+tuple(self.para['arrays']['distance'][[0,-1]])
         )
@@ -1092,8 +1150,10 @@ class matching:
 
       def update_plot_distance(n):
           
-          n = int(n)
+          n_scaled = int(n)
+          n = int(n*(2**times))
           # print(h)
+          # print('\t\tn: ',n,n_scaled,times)
 
           model = 'joint'
           y = {'NN':None,'nNN':None}
@@ -1103,12 +1163,12 @@ class matching:
                weight = 1-weight
             y[pop] = fun_wrapper(
                 self.model['fit_function'][model]['distance'][pop],
-                self.para['arrays']['distance'],
+                self.para['arrays']['distance'][::2**times],
                 self.model['fit_parameter'][model]['distance'][pop][n,:]
               ) * weight
             h['distance'][pop].set_ydata(y[pop])
 
-            for rect,height in zip(h['distance_hist'][pop],joint_hist_norm_dist[:,n,i+1]):
+            for rect,height in zip(h['distance_hist'][pop],joint_hist_norm_dist[:,n_scaled,i+1]):
                 rect.set_height(height)
             
             h['correlation_marker'].set_xdata(self.para['arrays']['correlation'][n])
@@ -1117,8 +1177,9 @@ class matching:
         
       def update_plot_correlation(n):
 
-          n = int(n)
-          # print('\t\tn: ',n)
+          n_scaled = int(n)
+          n = int(n*2**times)
+          # print('\t\tn: ',n,n_scaled)
           # print('distance:', n,self.para['arrays']['distance'][n])
           model = 'joint'
           y = {'NN':None,'nNN':None}
@@ -1131,13 +1192,13 @@ class matching:
                weight = 1-weight
             y[pop] = fun_wrapper(
                 self.model['fit_function'][model]['correlation'][pop],
-                self.para['arrays']['correlation'],
+                self.para['arrays']['correlation'][::2**times],
                 self.model['fit_parameter'][model]['correlation'][pop][n,:]
               ) * weight
             h['correlation'][pop].set_ydata(y[pop])
             max_val = max(max_val,y[pop].max())
 
-            for rect,height in zip(h['correlation_hist'][pop],joint_hist_norm_corr[n,:,i+1]):
+            for rect,height in zip(h['correlation_hist'][pop],joint_hist_norm_corr[n_scaled,:,i+1]):
                 rect.set_height(height)
                 max_val = max(max_val,height)
             h['distance_marker'].set_ydata(self.para['arrays']['distance'][n])
@@ -1145,24 +1206,23 @@ class matching:
           plt.setp(ax[1][0],ylim=[0,max_val*1.1])
           fig.canvas.draw_idle()
 
-      distance_init = 110
+      distance_init = 10
       correlation_init = 10
 
       self.slider = {}
-      self.slider['distance'] = Slider(axamp_dist, r'd_{com}', 0, self.para['nbins']-1, valinit=distance_init,orientation='horizontal',valstep=range(nbins))
-      self.slider['correlation'] = Slider(axamp_corr, r'c_{com}', 0, self.para['nbins']-1, valinit=correlation_init,orientation='horizontal',valstep=range(nbins))
+      self.slider['distance'] = Slider(axamp_dist, r'd_{com}', 0, nbins-1, valinit=distance_init,orientation='horizontal',valstep=range(nbins))
+      self.slider['correlation'] = Slider(axamp_corr, r'c_{com}', 0, nbins-1, valinit=correlation_init,orientation='horizontal',valstep=range(nbins))
       
       self.slider['distance'].on_changed(update_plot_distance)
       self.slider['correlation'].on_changed(update_plot_correlation)
 
-      update_plot_distance(distance_init)
-      update_plot_correlation(correlation_init)
+      # update_plot_distance(distance_init)
+      # update_plot_correlation(correlation_init)
 
       plt.show(block=False)
 
 
-
-    def plot_model(self,animate=False,sv=False,suffix=''):
+    def plot_model(self,sv=False,suffix=''):
 
       rc('font',size=10)
       rc('axes',labelsize=12)
@@ -1173,23 +1233,6 @@ class matching:
       nbins = self.model[key_counts].shape[0]
 
       X, Y = np.meshgrid(self.para['arrays']['correlation'], self.para['arrays']['distance'])
-
-      mean_corr_NN, var_corr_NN = mean_of_trunc_lognorm(self.model['fit_parameter']['joint']['correlation']['NN'][:,1],self.model['fit_parameter']['joint']['correlation']['NN'][:,0],[0,1])
-      mean_dist_NN, var_dist_NN = mean_of_trunc_lognorm(self.model['fit_parameter']['joint']['distance']['NN'][:,1],self.model['fit_parameter']['joint']['distance']['NN'][:,0],[0,1])
-
-      if self.para['model'] == 'unshifted':
-        a = self.model['fit_parameter']['joint']['correlation']['nNN'][:,0]
-        b = self.model['fit_parameter']['joint']['correlation']['nNN'][:,1]
-        #mean_corr_nNN = a/(a+b)
-        #var_corr_nNN = a*b/((a+b)**2*(a+b+1))
-        mean_corr_nNN = b
-        var_corr_nNN = a
-      else:
-        #mean_corr_nNN, var_corr_nNN = mean_of_trunc_lognorm(self.model['fit_parameter']['joint']['correlation']['nNN'][:,1],self.model['fit_parameter']['joint']['correlation']['nNN'][:,0],[0,1])
-        mean_corr_nNN = self.model['fit_parameter']['joint']['correlation']['nNN'][:,1]
-        var_corr_nNN = self.model['fit_parameter']['joint']['correlation']['nNN'][:,0]
-      mean_corr_NN = 1-mean_corr_NN
-      #mean_corr_nNN = 1-mean_corr_nNN
 
       fig = plt.figure(figsize=(7,4),dpi=150)
       ax_phase = plt.axes([0.3,0.13,0.2,0.4])
@@ -1202,8 +1245,8 @@ class matching:
 
       im_ratio = ax_phase.imshow(NN_ratio,extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',clim=[0,0.5],origin='lower')
       nlev = 3
-      col = (np.ones((nlev,3)).T*np.linspace(0,1,nlev)).T
-      p_levels = ax_phase.contour(X,Y,self.model['p_same']['joint'],levels=[0.05,0.5,0.95],colors='b',linestyles=[':','--','-'])
+      # col = (np.ones((nlev,3)).T*np.linspace(0,1,nlev)).T
+      # p_levels = ax_phase.contour(X,Y,self.model['p_same']['joint'],levels=[0.05,0.5,0.95],colors='b',linestyles=[':','--','-'])
       ax_phase.set_xlim([0,1])
       ax_phase.set_ylim([0,self.para['neighbor_distance']])
       ax_phase.tick_params(axis='x',which='both',bottom=True,top=True,labelbottom=False,labeltop=True)
@@ -1282,7 +1325,7 @@ class matching:
       ax_corr.tick_params(axis='x',which='both',bottom=True,top=False,labelbottom=False,labeltop=False)
 
       #ax_parameter =
-      p_steps, rates = self.RoC(100)
+      p_steps, rates = self.calculate_RoC(100)
 
       ax_cum = plt.axes([0.675,0.7,0.3,0.225])
       add_number(fig,ax_cum,order=2)
@@ -1404,7 +1447,7 @@ class matching:
         ext = 'png'
         path = os.path.join(self.para['pathMouse'],'Sheintuch_matching_%s%s.%s'%(self.para['model'],suffix,ext))
         plt.savefig(path,format=ext,dpi=150)
-      return
+      # return
       #ax_cvc = plt.axes([0.65,0.1,0.2,0.4])
       #idx = self.data_cross['fp_corr_max']>0
       #ax_cvc.scatter(self.data_cross['fp_corr_max'][idx].toarray().flat,self.data_cross['fp_corr'][idx].toarray().flat,c='k',marker='.')
@@ -1417,10 +1460,16 @@ class matching:
       #plt.show(block=False)
       #return
 
+    def plot_fit_parameters(self,animate=False,sv=False):
       ## plot fit parameters
+
+      nbins = self.para['nbins']
+      key_counts = 'counts' if self.para['model']=='shifted' else 'counts_unshifted'
+      mean, var = self.get_population_mean_and_var()
+
       plt.figure()
       plt.subplot(221)
-      plt.plot(self.para['arrays']['correlation'],mean_dist_NN,'g',label='lognorm $\mu$')
+      plt.plot(self.para['arrays']['correlation'],mean['distance']['NN'],'g',label='lognorm $\mu$')
       plt.plot(self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['distance']['nNN'][:,1],'r',label='gauss $\mu$')
       plt.title('distance models')
       #plt.plot(self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['distance']['all'][:,2],'g--')
@@ -1428,25 +1477,26 @@ class matching:
       plt.legend()
 
       plt.subplot(223)
-      plt.plot(self.para['arrays']['correlation'],var_dist_NN,'g',label='lognorm $\sigma$')
+      plt.plot(self.para['arrays']['correlation'],var['distance']['NN'],'g',label='lognorm $\sigma$')
       plt.plot(self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['distance']['nNN'][:,0],'r',label='gauss $\sigma$')
       #plt.plot(self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['distance']['nNN'][:,1],'r--',label='dist $\gamma$')
       plt.legend()
 
       plt.subplot(222)
-      plt.plot(self.para['arrays']['distance'],mean_corr_NN,'g',label='lognorm $\mu$')#self.model['fit_parameter']['joint']['correlation']['NN'][:,1],'g')#
+      plt.plot(self.para['arrays']['distance'],mean['correlation']['NN'],'g',label='lognorm $\mu$')#self.model['fit_parameter']['joint']['correlation']['NN'][:,1],'g')#
       plt.plot(self.para['arrays']['distance'],self.model['fit_parameter']['joint']['correlation']['nNN'][:,1],'r',label='gauss $\mu$')
       plt.title('correlation models')
       plt.legend()
 
       plt.subplot(224)
-      plt.plot(self.para['arrays']['distance'],var_corr_NN,'g',label='lognorm $\sigma$')
+      plt.plot(self.para['arrays']['distance'],var['correlation']['NN'],'g',label='lognorm $\sigma$')
       plt.plot(self.para['arrays']['distance'],self.model['fit_parameter']['joint']['correlation']['nNN'][:,0],'r',label='gauss $\sigma$')
       plt.legend()
       plt.tight_layout()
       plt.show(block=False)
 
-      #return
+      # return
+    
       fig = plt.figure()
       plt.subplot(322)
       plt.plot(self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['distance']['NN'][:,1],'g')
@@ -1455,8 +1505,8 @@ class matching:
       plt.ylim([0,self.para['neighbor_distance']])
 
       plt.subplot(321)
-      plt.plot(self.para['arrays']['distance'],mean_corr_NN,'g')#self.model['fit_parameter']['joint']['correlation']['NN'][:,1],'g')#
-      plt.plot(self.para['arrays']['distance'],mean_corr_nNN,'r')#self.model['fit_parameter']['joint']['correlation']['nNN'][:,1],'r')#
+      plt.plot(self.para['arrays']['distance'],mean['correlation']['NN'],'g')#self.model['fit_parameter']['joint']['correlation']['NN'][:,1],'g')#
+      plt.plot(self.para['arrays']['distance'],mean['correlation']['nNN'],'r')#self.model['fit_parameter']['joint']['correlation']['nNN'][:,1],'r')#
       plt.xlim([0,self.para['neighbor_distance']])
       plt.ylim([0.5,1])
 
@@ -1467,16 +1517,16 @@ class matching:
       plt.bar(self.para['arrays']['distance'],self.model[key_counts][...,1].sum(1),self.para['arrays']['distance_step'],facecolor='g',alpha=0.5)
       h_d_move = plt.bar(self.para['arrays']['distance'],np.zeros(nbins),self.para['arrays']['distance_step'],facecolor='k')
 
-      model_distance_all = (fun_wrapper(self.model['fit_function']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['NN'])*self.model[key_counts][...,1].sum() + fun_wrapper(self.model['fit_function']['distance']['nNN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['nNN'])*self.model[key_counts][...,2].sum())*self.para['arrays']['distance_step']
+      model_distance_all = (fun_wrapper(self.model['fit_function']['single']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['NN'])*self.model[key_counts][...,1].sum() + fun_wrapper(self.model['fit_function']['single']['distance']['nNN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['nNN'])*self.model[key_counts][...,2].sum())*self.para['arrays']['distance_step']
 
-      plt.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['distance']['all'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['all'])*self.model[key_counts][...,0].sum()*self.para['arrays']['distance_step'],'k')
+      plt.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['single']['distance']['all'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['all'])*self.model[key_counts][...,0].sum()*self.para['arrays']['distance_step'],'k')
       plt.plot(self.para['arrays']['distance'],model_distance_all,'k--')
 
-      plt.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['all'][1:3])*self.model['fit_parameter']['single']['distance']['all'][0]*self.model[key_counts][...,0].sum()*self.para['arrays']['distance_step'],'g')
-      plt.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['NN'])*self.model[key_counts][...,1].sum()*self.para['arrays']['distance_step'],'g--')
+      plt.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['single']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['all'][1:3])*self.model['fit_parameter']['single']['distance']['all'][0]*self.model[key_counts][...,0].sum()*self.para['arrays']['distance_step'],'g')
+      plt.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['single']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['NN'])*self.model[key_counts][...,1].sum()*self.para['arrays']['distance_step'],'g--')
 
-      plt.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['distance']['nNN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['all'][3:])*(1-self.model['fit_parameter']['single']['distance']['all'][0])*self.model[key_counts][...,0].sum()*self.para['arrays']['distance_step'],'r')
-      plt.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['distance']['nNN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['nNN'])*self.model[key_counts][...,2].sum()*self.para['arrays']['distance_step'],'r--')
+      plt.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['single']['distance']['nNN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['all'][3:])*(1-self.model['fit_parameter']['single']['distance']['all'][0])*self.model[key_counts][...,0].sum()*self.para['arrays']['distance_step'],'r')
+      plt.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['single']['distance']['nNN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['nNN'])*self.model[key_counts][...,2].sum()*self.para['arrays']['distance_step'],'r--')
       plt.xlim([0,self.para['neighbor_distance']])
       plt.xlabel('distance')
 
@@ -1486,18 +1536,20 @@ class matching:
       plt.bar(self.para['arrays']['correlation'],self.model[key_counts][...,1].sum(0),1/nbins,facecolor='g',alpha=0.5)
       h_fp_move = plt.bar(self.para['arrays']['correlation'],np.zeros(nbins),1/nbins,facecolor='k')
 
-      model_fp_correlation_all = (fun_wrapper(self.model['fit_function']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['NN'])*self.model[key_counts][...,1].sum() + fun_wrapper(self.model['fit_function']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['nNN'])*self.model[key_counts][...,2].sum())*self.para['arrays']['correlation_step']
-      plt.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['correlation']['all'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['all'])*self.model[key_counts][...,0].sum()*self.para['arrays']['correlation_step'],'k')
+      model_fp_correlation_all = (fun_wrapper(self.model['fit_function']['single']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['NN'])*self.model[key_counts][...,1].sum() + fun_wrapper(self.model['fit_function']['single']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['nNN'])*self.model[key_counts][...,2].sum())*self.para['arrays']['correlation_step']
+      plt.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['single']['correlation']['all'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['all'])*self.model[key_counts][...,0].sum()*self.para['arrays']['correlation_step'],'k')
       plt.plot(self.para['arrays']['correlation'],model_fp_correlation_all,'k--')
 
-      plt.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['all'][1:3])*self.model['fit_parameter']['single']['correlation']['all'][0]*self.model[key_counts][...,0].sum()*self.para['arrays']['correlation_step'],'g')
-      plt.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['NN'])*self.model[key_counts][...,1].sum()*self.para['arrays']['correlation_step'],'g--')
+      plt.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['single']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['all'][1:3])*self.model['fit_parameter']['single']['correlation']['all'][0]*self.model[key_counts][...,0].sum()*self.para['arrays']['correlation_step'],'g')
+      plt.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['single']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['NN'])*self.model[key_counts][...,1].sum()*self.para['arrays']['correlation_step'],'g--')
 
-      plt.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['all'][3:])*(1-self.model['fit_parameter']['single']['correlation']['all'][0])*self.model[key_counts][...,0].sum()*self.para['arrays']['correlation_step'],'r')
-      plt.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['nNN'])*self.model[key_counts][...,2].sum()*self.para['arrays']['correlation_step'],'r--')
+      plt.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['single']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['all'][3:])*(1-self.model['fit_parameter']['single']['correlation']['all'][0])*self.model[key_counts][...,0].sum()*self.para['arrays']['correlation_step'],'r')
+      plt.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['single']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['nNN'])*self.model[key_counts][...,2].sum()*self.para['arrays']['correlation_step'],'r--')
 
       plt.xlabel('correlation')
       plt.xlim([0,1])
+      # plt.show()
+      # return
 
       ax_d = plt.subplot(326)
       d_bar1 = ax_d.bar(self.para['arrays']['distance'],self.model[key_counts][:,0,0],self.para['neighbor_distance']/nbins,facecolor='k',alpha=0.5)
@@ -1505,8 +1557,8 @@ class matching:
       d_bar3 = ax_d.bar(self.para['arrays']['distance'],self.model[key_counts][:,0,1],self.para['neighbor_distance']/nbins,facecolor='g',alpha=0.5)
 
       ### now, plot model stuff
-      d_model_nNN, = ax_d.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['distance']['nNN_joint'],self.para['arrays']['distance'],self.model['fit_parameter']['joint']['distance']['nNN'][0,:]),'r')
-      d_model_NN, = ax_d.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['joint']['distance']['NN'][0,:]),'g')
+      d_model_nNN, = ax_d.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['joint']['distance']['nNN'],self.para['arrays']['distance'],self.model['fit_parameter']['joint']['distance']['nNN'][0,:]),'r')
+      d_model_NN, = ax_d.plot(self.para['arrays']['distance'],fun_wrapper(self.model['fit_function']['joint']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['joint']['distance']['NN'][0,:]),'g')
 
       h_d = [d_bar1,d_bar3,d_bar2,h_d_move,d_model_NN,d_model_nNN]
       #h_d = d_bar1
@@ -1521,8 +1573,8 @@ class matching:
       fp_bar3 = ax_fp.bar(self.para['arrays']['correlation'],self.model[key_counts][0,:,1],1/nbins,facecolor='g',alpha=0.5)
 
       ### now, plot model stuff
-      fp_model_nNN, = ax_fp.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['correlation']['nNN_joint'],self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['correlation']['nNN'][0,:]),'r')
-      fp_model_NN, = ax_fp.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['correlation']['NN'][0,:]),'g')
+      fp_model_nNN, = ax_fp.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['joint']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['correlation']['nNN'][0,:]),'r')
+      fp_model_NN, = ax_fp.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['joint']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['correlation']['NN'][0,:]),'g')
 
 
       h_fp = [fp_bar1,fp_bar3,fp_bar2,h_fp_move,fp_model_NN,fp_model_nNN]
@@ -1551,15 +1603,15 @@ class matching:
         (1-self.model['p_same']['single']['distance'][n])*self.model[key_counts][n,:,0].sum()
 
 
-        h_fp[4].set_ydata(fun_wrapper(self.model['fit_function']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['correlation']['NN'][n,:])*self.model['p_same']['single']['distance'][n]*self.model[key_counts][n,:,0].sum()*self.para['arrays']['correlation_step'])
-        h_fp[5].set_ydata(fun_wrapper(self.model['fit_function']['correlation']['nNN_joint'],self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['correlation']['nNN'][n,:])*(1-self.model['p_same']['single']['distance'][n])*self.model[key_counts][n,:,0].sum()*self.para['arrays']['correlation_step'])
+        h_fp[4].set_ydata(fun_wrapper(self.model['fit_function']['joint']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['correlation']['NN'][n,:])*self.model['p_same']['single']['distance'][n]*self.model[key_counts][n,:,0].sum()*self.para['arrays']['correlation_step'])
+        h_fp[5].set_ydata(fun_wrapper(self.model['fit_function']['joint']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['correlation']['nNN'][n,:])*(1-self.model['p_same']['single']['distance'][n])*self.model[key_counts][n,:,0].sum()*self.para['arrays']['correlation_step'])
 
         self.model['p_same']['single']['correlation'][n]*self.model[key_counts][:,n,0].sum()
         (1-self.model['p_same']['single']['correlation'][n])*self.model[key_counts][:,n,0].sum()
 
-        h_d[4].set_ydata(fun_wrapper(self.model['fit_function']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['joint']['distance']['NN'][n,:])*self.model['p_same']['single']['correlation'][n]*self.model[key_counts][:,n,0].sum()*self.para['arrays']['distance_step'])
+        h_d[4].set_ydata(fun_wrapper(self.model['fit_function']['joint']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['joint']['distance']['NN'][n,:])*self.model['p_same']['single']['correlation'][n]*self.model[key_counts][:,n,0].sum()*self.para['arrays']['distance_step'])
 
-        h_d[5].set_ydata(fun_wrapper(self.model['fit_function']['distance']['nNN_joint'],self.para['arrays']['distance'],self.model['fit_parameter']['joint']['distance']['nNN'][n,:])*(1-self.model['p_same']['single']['correlation'][n])*self.model[key_counts][:,n,0].sum()*self.para['arrays']['distance_step'])
+        h_d[5].set_ydata(fun_wrapper(self.model['fit_function']['joint']['distance']['nNN'],self.para['arrays']['distance'],self.model['fit_parameter']['joint']['distance']['nNN'][n,:])*(1-self.model['p_same']['single']['correlation'][n])*self.model[key_counts][:,n,0].sum()*self.para['arrays']['distance_step'])
         #print(tuple(h_d[0]))
         return tuple(h_d[0]) + tuple(h_d[1]) + tuple(h_d[2]) + tuple(h_d[3]) + (h_d[4],) + (h_d[5],) + tuple(h_fp[0]) + tuple(h_fp[1]) + tuple(h_fp[2]) + tuple(h_fp[3]) + (h_fp[4],) + (h_fp[5],)
 
@@ -1570,7 +1622,7 @@ class matching:
         #writer = Writer(fps=15, metadata=dict(artist='Me'), bitrate=900)
 
         anim = animation.FuncAnimation(fig, update_distr, fargs=(h_d,h_fp),frames=nbins,interval=100, blit=True)
-        svPath = os.path.join(self.para['pathMouse'],'animation_single_models_%s.gif'%model)
+        svPath = os.path.join(self.para['pathData'],'animation_single_models.gif')
         anim.save(svPath, writer='imagemagick',fps=15)#writer)
         print('animation saved at %s'%svPath)
         #anim
@@ -1616,54 +1668,70 @@ class matching:
       plt.show(block=False)
 
 
-      plt.figure()
-      ax = plt.subplot(111,projection='3d')
-      X, Y = np.meshgrid(self.para['arrays']['correlation'], self.para['arrays']['distance'])
-      NN_ratio = self.model[key_counts][:,:,1]/self.model[key_counts][:,:,0]
-      cmap = plt.cm.RdYlGn
-      NN_ratio = cmap(NN_ratio)
-      ax.plot_surface(X,Y,self.model[key_counts][:,:,0],facecolors=NN_ratio)
-      ax.view_init(30,-120)
-      ax.set_xlabel('footprint correlation',fontsize=14)
-      ax.set_ylabel('distance',fontsize=14)
-      ax.set_zlabel('# pairs',fontsize=14)
-      plt.tight_layout()
-      plt.show(block=False)
 
       if sv:
         ext = 'png'
-        path = os.path.join(self.para['pathMouse'],'Sheintuch_matching_phase_%s%s.%s'%(self.para['model'],suffix,ext))
+        path = os.path.join(self.para['pathData'],'Sheintuch_matching_phase_%s%s.%s'%(self.para['model'],suffix,ext))
         plt.savefig(path,format=ext,dpi=300)
 
       return
 
+    def plot_count_histogram(self,times=0):
 
-      plt.figure()
-      plt.subplot(221)
-      plt.imshow(self.model[key_counts][:,:,0],extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',clim=[0,self.model[key_counts][:,:,0].max()],origin='lower')
-      nlev = 3
-      col = (np.ones((nlev,3)).T*np.linspace(0,1,nlev)).T
-      p_levels = plt.contour(X,Y,self.model['p_same']['joint'],levels=[0.05,0.5,0.95],colors=col)
+      key_counts = 'counts' if self.para['model']=='shifted' else 'counts_unshifted'
+      counts = self.model[key_counts]
+      nbins = self.para['nbins']
+
+      if times:
+         counts = scale_down_counts(counts,times)
+         nbins = counts.shape[0]
+      arrays = self.build_arrays(nbins)
+
+      plt.figure(figsize=(12,9))
+      # plt.subplot(221)
+      ax = plt.subplot(221,projection='3d')
+      X, Y = np.meshgrid(arrays['correlation'], arrays['distance'])
+      NN_ratio = counts[:,:,1]/counts[:,:,0]
+      cmap = plt.cm.RdYlGn
+      NN_ratio = cmap(NN_ratio)
+      ax.plot_surface(X,Y,counts[:,:,0],facecolors=NN_ratio)
+      ax.view_init(30,-120)
+      ax.set_xlabel('footprint correlation',fontsize=14)
+      ax.set_ylabel('distance',fontsize=14)
+      ax.set_zlabel('# pairs',fontsize=14)
+
+      # plt.imshow(counts[...,0],extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',clim=[0,counts[...,0].max()],origin='lower')
+      # nlev = 3
+      # col = (np.ones((nlev,3)).T*np.linspace(0,1,nlev)).T
+      # p_levels = plt.contour(X,Y,self.model['p_same']['joint'],levels=[0.05,0.5,0.95],colors=col)
       #plt.colorbar(p_levels)
       #plt.imshow(self.model[key_counts][...,0],extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',origin='lower')
-      plt.subplot(222)
-      plt.imshow(self.model[key_counts][...,0],extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',origin='lower')
-      plt.subplot(223)
-      plt.imshow(self.model[key_counts][...,1],extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',origin='lower')
-      plt.subplot(224)
-      plt.imshow(self.model[key_counts][...,2],extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',origin='lower')
+      ax2 = plt.subplot(222)
+      ax2.imshow(counts[...,0],extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',origin='lower')
+      ax2.set_title('all counts',y=1,pad=-14,color='white',fontweight='bold')
+      
+      ax3 = plt.subplot(223)
+      ax3.imshow(counts[...,1],extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',origin='lower')
+      ax3.set_title('nearest neighbour counts',y=1,pad=-14,color='white',fontweight='bold')
+
+      ax4 = plt.subplot(224)
+      ax4.imshow(counts[...,2],extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',origin='lower')
+      ax4.set_title('non-nearest neighbour counts',y=1,pad=-14,color='white',fontweight='bold')
+      plt.tight_layout()
       plt.show(block=False)
 
 
 
+    def plot_something(self,animate=False):
+      key_counts = 'counts' if self.para['model']=='shifted' else 'counts_unshifted'
 
       plt.figure()
       W_NN = self.model[key_counts][...,1].sum() / self.model[key_counts][...,0].sum()
       #W_NN = 0.5
       W_nNN = 1-W_NN
       plt.subplot(211)
-      pdf_NN = fun_wrapper(self.model['fit_function']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['NN'])*self.para['arrays']['correlation_step']
-      pdf_nNN = fun_wrapper(self.model['fit_function']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['nNN'])*self.para['arrays']['correlation_step']
+      pdf_NN = fun_wrapper(self.model['fit_function']['single']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['NN'])*self.para['arrays']['correlation_step']
+      pdf_nNN = fun_wrapper(self.model['fit_function']['single']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['nNN'])*self.para['arrays']['correlation_step']
       pdf_all = pdf_NN*W_NN+pdf_nNN*W_nNN
 
       plt.plot(self.para['arrays']['correlation'],pdf_NN*W_NN,'g')
@@ -1718,7 +1786,7 @@ class matching:
 
       if animate:
         anim = animation.FuncAnimation(fig, rotate_view, fargs=(axes,30), frames=180, interval=100, blit=False)
-        svPath = os.path.join(self.para['pathMouse'],'animation_p_same.gif')
+        svPath = os.path.join(self.para['pathData'],'animation_p_same.gif')
         anim.save(svPath, writer='imagemagick',fps=15)#writer)
         print('animation saved at %s'%svPath)
         #anim
@@ -1733,7 +1801,7 @@ class matching:
       print('smoothing by gaussian')
     
 
-    def plot_matches(self, s, p_thr=0.5,plot_results=False):
+    def plot_matches(self, s_ref, s, p_thr=0.5):
     
       '''
 
@@ -1747,130 +1815,76 @@ class matching:
       matches = linear_sum_assignment(1 - self.data[s]['p_same'].toarray())
       p_matched = self.data[s]['p_same'].toarray()[matches]
 
-      if plot_results:
-          idx_TP = np.where(np.array(p_matched) > p_thr)[0] ## thresholding results
-          nA_ref = self.data[s]['p_same'].shape[0]
-          if len(idx_TP) > 0:
-              matched_ROIs1 = matches[0][idx_TP]    # ground truth
-              matched_ROIs2 = matches[1][idx_TP]   # algorithm - comp
-              non_matched1 = np.setdiff1d(list(range(nA_ref)), matches[0][idx_TP])
-              non_matched2 = np.setdiff1d(list(range(self.data[s]['nA'][0])), matches[1][idx_TP])
-              TP = np.sum(np.array(p_matched) > p_thr).astype('float32')
-          else:
-              TP = 0.
-              plot_results = False
-              matched_ROIs1 = []
-              matched_ROIs2 = []
-              non_matched1 = list(range(nA_ref))
-              non_matched2 = list(range(self.data[s]['nA'][0]))
+      # if plot_results:
+      idx_TP = np.where(np.array(p_matched) > p_thr)[0] ## thresholding results
+      nA_ref = self.data[s]['p_same'].shape[0]
+      if len(idx_TP) > 0:
+          matched_ROIs1 = matches[0][idx_TP]    # ground truth
+          matched_ROIs2 = matches[1][idx_TP]   # algorithm - comp
+          non_matched1 = np.setdiff1d(list(range(nA_ref)), matches[0][idx_TP])
+          non_matched2 = np.setdiff1d(list(range(self.data[s]['nA'][0])), matches[1][idx_TP])
+          TP = np.sum(np.array(p_matched) > p_thr).astype('float32')
+      else:
+          TP = 0.
+          plot_results = False
+          matched_ROIs1 = []
+          matched_ROIs2 = []
+          non_matched1 = list(range(nA_ref))
+          non_matched2 = list(range(self.data[s]['nA'][0]))
 
-              FN = nA_ref - TP
-              FP = self.data[s]['nA'][0] - TP
-              TN = 0
+          FN = nA_ref - TP
+          FP = self.data[s]['nA'][0] - TP
+          TN = 0
 
-              performance = dict()
-              performance['recall'] = TP / (TP + FN)
-              performance['precision'] = TP / (TP + FP)
-              performance['accuracy'] = (TP + TN) / (TP + FP + FN + TN)
-              performance['f1_score'] = 2 * TP / (2 * TP + FP + FN)
+          performance = dict()
+          performance['recall'] = TP / (TP + FN)
+          performance['precision'] = TP / (TP + FP)
+          performance['accuracy'] = (TP + TN) / (TP + FP + FN + TN)
+          performance['f1_score'] = 2 * TP / (2 * TP + FP + FN)
 
-          print('plotting...')
-          t_start = time.time()
-          cmap = 'viridis'
+      print('plotting...')
+      t_start = time.time()
+      cmap = 'viridis'
 
-          Cn = self.A_ref.sum(1).reshape(512,512)
+      self.currentPath = self.para['paths'][s_ref]
+      self.A_ref = self.load_footprints(s_ref)
+      self.currentPath = self.para['paths'][s]
+      self.A = self.load_footprints(s)
 
-          level = 0.1
-          plt.figure(figsize=(15,12))
-          plt.rcParams['pdf.fonttype'] = 42
-          font = {'family': 'Myriad Pro',
-                'weight': 'regular',
-                'size': 10}
-          plt.rc('font', **font)
-          lp, hp = np.nanpercentile(np.array(Cn), [5, 95])
+      Cn = self.A_ref.sum(1).reshape(512,512)
 
-          ax_matches = plt.subplot(121)
-          ax_nonmatches = plt.subplot(122)
+      level = 0.1
+      plt.figure(figsize=(15,12))
+      plt.rcParams['pdf.fonttype'] = 42
+      font = {'family': 'Myriad Pro',
+            'weight': 'regular',
+            'size': 10}
+      plt.rc('font', **font)
+      lp, hp = np.nanpercentile(np.array(Cn), [5, 95])
 
-          ax_matches.imshow(Cn, vmin=lp, vmax=hp, cmap=cmap)
-          ax_nonmatches.imshow(Cn, vmin=lp, vmax=hp, cmap=cmap)
+      ax_matches = plt.subplot(121)
+      ax_nonmatches = plt.subplot(122)
 
-          A = np.reshape(self.A_ref.astype('float32').toarray(), self.para['dims'] + (-1,), order='F').transpose(2, 0, 1)
-          [ax_matches.contour(a, levels=[level], colors='w', linewidths=1) for a in A[matched_ROIs1,...]]
-          [ax_nonmatches.contour(a, levels=[level], colors='w', linewidths=1) for a in A[non_matched1,...]]
+      ax_matches.imshow(Cn, vmin=lp, vmax=hp, cmap=cmap)
+      ax_nonmatches.imshow(Cn, vmin=lp, vmax=hp, cmap=cmap)
 
-          print('first half done - %5.3f'%(time.time()-t_start))
-          A = None
-          A = np.reshape(self.A.astype('float32').toarray(), self.para['dims'] + (-1,), order='F').transpose(2, 0, 1)
+      A = np.reshape(self.A_ref.astype('float32').toarray(), self.para['dims'] + (-1,), order='F').transpose(2, 0, 1)
+      [ax_matches.contour(a, levels=[level], colors='w', linewidths=1) for a in A[matched_ROIs1,...]]
+      [ax_nonmatches.contour(a, levels=[level], colors='w', linewidths=1) for a in A[non_matched1,...]]
 
-          [ax_matches.contour(a, levels=[level], colors='r', linewidths=1) for a in A[matched_ROIs2,...]]
-          [ax_nonmatches.contour(a, levels=[level], colors='r', linewidths=1) for a in A[non_matched2,...]]
-          A = None
+      print('first half done - %5.3f'%(time.time()-t_start))
+      A = None
+      A = np.reshape(self.A.astype('float32').toarray(), self.para['dims'] + (-1,), order='F').transpose(2, 0, 1)
 
-          plt.draw()
-          print('done. time taken: %5.3f'%(time.time()-t_start))
-          plt.show(block=False)
+      [ax_matches.contour(a, levels=[level], colors='r', linewidths=1) for a in A[matched_ROIs2,...]]
+      [ax_nonmatches.contour(a, levels=[level], colors='r', linewidths=1) for a in A[non_matched2,...]]
+      A = None
+
+      plt.draw()
+      print('done. time taken: %5.3f'%(time.time()-t_start))
+      plt.show(block=False)
 
       return matches, p_matched
-
-    def RoC(self,steps):
-      key_counts = 'counts' if self.para['model']=='shifted' else 'counts_unshifted'
-      p_steps = np.linspace(0,1,steps+1)
-
-      rates = {'tp':      {},
-              'tn':      {},
-              'fp':      {},
-              'fn':      {},
-              'cumfrac': {}}
-
-      for key in rates.keys():
-        rates[key] = {'joint':np.zeros(steps),
-                      'distance':np.zeros(steps),
-                      'correlation':np.zeros(steps)}
-
-      nTotal = self.model[key_counts][...,0].sum()
-      for i in range(steps):
-        p = p_steps[i]
-
-        for key in ['joint','distance','correlation']:
-
-          if key == 'joint':
-            idxes_negative = self.model['p_same']['joint'] < p
-            idxes_positive = self.model['p_same']['joint'] >= p
-
-            tp = self.model[key_counts][idxes_positive,1].sum()
-            tn = self.model[key_counts][idxes_negative,2].sum()
-            fp = self.model[key_counts][idxes_positive,2].sum()
-            fn = self.model[key_counts][idxes_negative,1].sum()
-
-            rates['cumfrac']['joint'][i] = self.model[key_counts][idxes_negative,0].sum()/nTotal
-          elif key == 'distance':
-            idxes_negative = self.model['p_same']['single']['distance'] < p
-            idxes_positive = self.model['p_same']['single']['distance'] >= p
-
-            tp = self.model[key_counts][idxes_positive,:,1].sum()
-            tn = self.model[key_counts][idxes_negative,:,2].sum()
-            fp = self.model[key_counts][idxes_positive,:,2].sum()
-            fn = self.model[key_counts][idxes_negative,:,1].sum()
-
-            rates['cumfrac']['distance'][i] = self.model[key_counts][idxes_negative,:,0].sum()/nTotal
-          else:
-            idxes_negative = self.model['p_same']['single']['correlation'] < p
-            idxes_positive = self.model['p_same']['single']['correlation'] >= p
-
-            tp = self.model[key_counts][:,idxes_positive,1].sum()
-            tn = self.model[key_counts][:,idxes_negative,2].sum()
-            fp = self.model[key_counts][:,idxes_positive,2].sum()
-            fn = self.model[key_counts][:,idxes_negative,1].sum()
-
-            rates['cumfrac']['correlation'][i] = self.model[key_counts][:,idxes_negative,0].sum()/nTotal
-
-          rates['tp'][key][i] = tp/(fn+tp)
-          rates['tn'][key][i] = tn/(fp+tn)
-          rates['fp'][key][i] = fp/(fp+tn)
-          rates['fn'][key][i] = fn/(fn+tp)
-
-      return p_steps, rates
 
 
     def plot_neuron_numbers(self):
@@ -1911,7 +1925,7 @@ class matching:
       idxes = np.ones(self.results['assignments'].shape,'bool')
 
       fileName = f'cluster_stats_{suffix}.pkl'
-      pathLoad = os.path.join(self.para['pathMouse'],fileName)
+      pathLoad = os.path.join(self.para['pathData'],fileName)
       if os.path.exists(pathLoad):
         ld = pickleData([],pathLoad,'load')
         if ~np.all(np.isnan(ld['SNR_comp'])):
@@ -1939,12 +1953,12 @@ class matching:
       nC,nS = self.results['assignments'].shape
       ### plot point statistics
       if not ('match_2nd' in self.results.keys()):
-        self.results['match_2nd'] = np.zeros((nC,nS))
+        self.results['match_2nd'] = np.full((nC,nS),np.nan)
         for s in tqdm(range(1,nS)):
-          if s in self.results['data'].keys():
+          if s in self.data.keys():
             idx_c = np.where(~np.isnan(self.results['assignments'][:,s]))[0]
-            idx_c = idx_c[idx_c<self.results['data'][s]['p_same'].shape[0]]
-            scores_now = self.results['data'][s]['p_same'].toarray()
+            idx_c = idx_c[idx_c<self.data[s]['p_same'].shape[0]]
+            scores_now = self.data[s]['p_same'].toarray()
 
             self.results['match_2nd'][idx_c,s] = [max(scores_now[c,np.where(scores_now[c,:]!=self.results['p_matched'][c,s])[0]]) for c in idx_c]
       #
@@ -2040,6 +2054,112 @@ class matching:
 
 
 
+    def calculate_RoC(self,steps):
+      key_counts = 'counts' if self.para['model']=='shifted' else 'counts_unshifted'
+      p_steps = np.linspace(0,1,steps+1)
+
+      rates = {'tp':      {},
+              'tn':      {},
+              'fp':      {},
+              'fn':      {},
+              'cumfrac': {}}
+
+      for key in rates.keys():
+        rates[key] = {'joint':np.zeros(steps),
+                      'distance':np.zeros(steps),
+                      'correlation':np.zeros(steps)}
+
+      nTotal = self.model[key_counts][...,0].sum()
+      for i in range(steps):
+        p = p_steps[i]
+
+        for key in ['joint','distance','correlation']:
+
+          if key == 'joint':
+            idxes_negative = self.model['p_same']['joint'] < p
+            idxes_positive = self.model['p_same']['joint'] >= p
+
+            tp = self.model[key_counts][idxes_positive,1].sum()
+            tn = self.model[key_counts][idxes_negative,2].sum()
+            fp = self.model[key_counts][idxes_positive,2].sum()
+            fn = self.model[key_counts][idxes_negative,1].sum()
+
+            rates['cumfrac']['joint'][i] = self.model[key_counts][idxes_negative,0].sum()/nTotal
+          elif key == 'distance':
+            idxes_negative = self.model['p_same']['single']['distance'] < p
+            idxes_positive = self.model['p_same']['single']['distance'] >= p
+
+            tp = self.model[key_counts][idxes_positive,:,1].sum()
+            tn = self.model[key_counts][idxes_negative,:,2].sum()
+            fp = self.model[key_counts][idxes_positive,:,2].sum()
+            fn = self.model[key_counts][idxes_negative,:,1].sum()
+
+            rates['cumfrac']['distance'][i] = self.model[key_counts][idxes_negative,:,0].sum()/nTotal
+          else:
+            idxes_negative = self.model['p_same']['single']['correlation'] < p
+            idxes_positive = self.model['p_same']['single']['correlation'] >= p
+
+            tp = self.model[key_counts][:,idxes_positive,1].sum()
+            tn = self.model[key_counts][:,idxes_negative,2].sum()
+            fp = self.model[key_counts][:,idxes_positive,2].sum()
+            fn = self.model[key_counts][:,idxes_negative,1].sum()
+
+            rates['cumfrac']['correlation'][i] = self.model[key_counts][:,idxes_negative,0].sum()/nTotal
+
+          rates['tp'][key][i] = tp/(fn+tp)
+          rates['tn'][key][i] = tn/(fp+tn)
+          rates['fp'][key][i] = fp/(fp+tn)
+          rates['fn'][key][i] = fn/(fn+tp)
+
+      return p_steps, rates
+    
+
+    def get_population_mean_and_var(self):
+      '''
+        function assumes correlation and distance model to be truncated 
+        lognormal distributions
+      '''
+      mean = {
+          'distance': {
+            'NN': None,
+            'nNN': None,
+          },
+          'correlation': {
+            'NN': None,
+            'nNN': None,
+          }
+      }
+      var = {
+          'distance': {
+            'NN': None,
+            'nNN': None,
+          },
+          'correlation': {
+            'NN': None,
+            'nNN': None,
+          }
+      }
+
+      mean['correlation']['NN'], var['correlation']['NN'] = mean_of_trunc_lognorm(self.model['fit_parameter']['joint']['correlation']['NN'][:,1],self.model['fit_parameter']['joint']['correlation']['NN'][:,0],[0,1])
+      mean['correlation']['NN'] = 1-mean['correlation']['NN']
+
+      mean['distance']['NN'], var['distance']['NN'] = mean_of_trunc_lognorm(self.model['fit_parameter']['joint']['distance']['NN'][:,1],self.model['fit_parameter']['joint']['distance']['NN'][:,0],[0,1])
+
+      if self.para['model'] == 'unshifted':
+        a = self.model['fit_parameter']['joint']['correlation']['nNN'][:,0]
+        b = self.model['fit_parameter']['joint']['correlation']['nNN'][:,1]
+        #mean_corr_nNN = a/(a+b)
+        #var_corr_nNN = a*b/((a+b)**2*(a+b+1))
+        mean['correlation']['nNN'] = b
+        var['correlation']['nNN'] = a
+      else:
+        #mean_corr_nNN, var_corr_nNN = mean_of_trunc_lognorm(self.model['fit_parameter']['joint']['correlation']['nNN'][:,1],self.model['fit_parameter']['joint']['correlation']['nNN'][:,0],[0,1])
+        mean['correlation']['nNN'] = self.model['fit_parameter']['joint']['correlation']['nNN'][:,1]
+        var['correlation']['nNN'] = self.model['fit_parameter']['joint']['correlation']['nNN'][:,0]
+      #mean_corr_nNN = 1-mean_corr_nNN
+      return mean, var
+  
+
 def mean_of_trunc_lognorm(mu,sigma,trunc_loc):
 
   alpha = (trunc_loc[0]-mu)/sigma
@@ -2074,3 +2194,24 @@ def add_number(fig,ax,order=1,offset=None):
     x = pos[0,0]+offset[0]
     y = pos[1,1]+offset[1]
     ax.text(x=x,y=y,s='%s)'%chr(96+order),ha='center',va='center',transform=None,weight='bold',fontsize=14)
+
+def scale_down_counts(counts,times=1):
+
+    '''
+      scales down the whole matrix "counts" by a factor of 2^times
+    '''
+
+    if times==0:
+       return counts
+    
+    assert counts.shape[0] > 8, 'No further scaling down allowed'
+    
+    cts = np.zeros(tuple((np.array(counts.shape[:2])/2).astype('int'))+(3,))
+    # print(counts.shape,cts.shape)
+    for d in range(counts.shape[2]):
+        for i in range(2):
+            for j in range(2):
+              cts[...,d] += counts[i::2,j::2,d]
+    
+    # print(counts.sum(),cts.sum(),' - ',counts[...,0].sum(),cts[...,0].sum())
+    return scale_down_counts(cts,times-1)
