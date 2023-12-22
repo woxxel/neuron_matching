@@ -8,10 +8,10 @@ matchingParams = {
     'paths':        paths,      # list of paths to CaImAn result files to be processed in order
     'pathData':     mousePath,   # path to which results are stored and loaded from
 
-    'dims':          (512,512),  # dimensionality of the imaging window
-    'pxtomu':       200./512,#530.68/512, # real distance between pixels in \mu m
+    'dims':         (512,512),  # dimensionality of the imaging window
+    'pxtomu':       530.68/512, #200./512, # real distance between pixels in \mu m
 
-    'nbins':        32,        # number of bins for the count histogram (should be n^2)
+    'nbins':        128,        # number of bins for the count histogram (should be n^2)
     'neighbor_distance': 12,    # \mu m distance up to which neurons are considered to be neighbors
     'model':        'shifted',  # ['shifted','unshifted','both'] - specifies whether to use maximum possible footprint correlation by shifting
     
@@ -24,5 +24,5 @@ matchingParams = {
     'CNN_thr':      0.6,        # cnn-classifier value
 
 
-    'min_session_correlation':   0.0,        # minimum value of correlation between session footprints to include data in matching
+    'min_session_correlation':   0.1,        # minimum value of correlation between session footprints to include data in matching
 }

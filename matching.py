@@ -23,19 +23,21 @@ from itertools import chain
 import numpy as np
 
 import scipy as sp
+from scipy import signal
 from scipy.io import loadmat
 from scipy.optimize import curve_fit, linear_sum_assignment
+import scipy.stats as sstats
 
-import matplotlib.pyplot as plt
-from matplotlib import rc
-from matplotlib import animation
+from matplotlib import pyplot as plt, rc, colors as mcolors
+# from matplotlib import animation
 # from matplotlib import cm
-import matplotlib.colors as mcolors
+from matplotlib.cm import get_cmap
 
 from matplotlib.widgets import Slider
+# from matplotlib_scalebar.scalebar import ScaleBar
 
-
-from .utils import pickleData, center_of_mass, calculate_img_correlation, get_shift_and_flow, fun_wrapper, load_dict_from_hdf5, normalize_sparse_array
+from .utils import pickleData, center_of_mass, calculate_img_correlation, get_shift_and_flow, build_remap_from_shift_and_flow, fun_wrapper, load_dict_from_hdf5, normalize_sparse_array
+from .utils_plot import plot_with_confidence, add_number
 from .parameters import matchingParams
 from .fit_functions import functions
 
@@ -61,6 +63,10 @@ class matching:
             'cm':       None,
             'p_same':   None,
             'idx_eval': None,
+            'SNR_comp': None,
+            'r_values': None,
+            'cnn_preds':None,
+            'filePath': None,
         }
 
         self.data = {}
@@ -221,16 +227,20 @@ class matching:
         s_ref = 0
         for (s,self.currentPath) in self.progress:
             self.data[s] = copy.deepcopy(self.data_blueprint)
-            # self.data[s].filePath = self.currentPath
+            self.data[s]['filePath'] = self.currentPath
 
-            self.A = self.load_footprints(s,store_data=True)
-
+            self.A = self.load_footprints(self.currentPath,s,store_data=True)
+            
             if not (self.A is None):
                 
                 self.progress.set_description('Aligning data from %s'%self.currentPath)
                 
                 ## prepare (and align) footprints
-                if not self.prepare_footprints(align_to_reference=s>0): continue
+                prepared,out_para = self.prepare_footprints(align_to_reference=s>0)
+                if not prepared: 
+                    print('skipping %s (image correlation %.2d too low)'%(self.currentPath,out_para))
+                    continue
+                # self.data[s]['remap'] = out_para
                 
                 ## calculating various statistics
                 self.data[s]['idx_eval'] &= (np.diff(self.A.indptr) != 0) ## finding non-empty rows in sparse array (https://mike.place/2015/sparse/)
@@ -256,6 +266,7 @@ class matching:
                     self.update_joint_model(s,s_ref)
 
                 self.A_ref = self.A.copy()
+                self.Cn_ref = self.data_tmp['Cn']
                 s_ref = s
 
         self.fit_model()
@@ -275,11 +286,11 @@ class matching:
         
         self.nS = len(self.para['paths'])
         self.progress = tqdm(zip(range(1,self.nS),self.para['paths'][1:]),total=self.nS,leave=True)
-        self.currentPath = self.para['paths'][0]
 
         ## load and prepare first set of footprints
-        self.A = self.load_footprints(0)
+        self.A = self.load_footprints(self.para['paths'][0],0)
         self.prepare_footprints(align_to_reference=False)
+        self.Cn_ref = self.data_tmp['Cn']
         self.A_ref = self.A[:,self.data[0]['idx_eval']]
         self.A0 = self.A.copy()   ## store initial footprints for common reference
         
@@ -298,15 +309,17 @@ class matching:
         # self.results['p_matched'][:,0] = np.NaN
 
         for (s,self.currentPath) in self.progress:
-            self.A = self.load_footprints(s)
+            self.A = self.load_footprints(self.currentPath,s)
 
             if not (self.A is None):
                 
                 self.progress.set_description('A union size: %d, Preparing footprints from Session #%d'%(self.data['joint']['nA'][0],s))
 
                 ## preparing data of current session
-                if not self.prepare_footprints(A_ref=self.A0): continue
-
+                prepared,out_para = self.prepare_footprints(A_ref=self.A0)
+                if not prepared: continue
+                
+                self.data[s]['remap'] = out_para
                 self.data[s]['cm'] = center_of_mass(self.A,self.para['dims'][0],self.para['dims'][1],convert=self.para['pxtomu'])
                 
 
@@ -416,7 +429,7 @@ class matching:
         return sp.sparse.csc_matrix(p_same)
 
 
-    def load_footprints(self,s,store_data=False):
+    def load_footprints(self,loadPath,s=None,store_data=False):
         '''
           function to load results from neuron detection (CaImAn, OnACID) and store in according dictionaries
 
@@ -424,18 +437,18 @@ class matching:
             * implement min/max thresholding (maybe shift thresholding to other part of code?)
         '''
 
-        if os.path.exists(self.currentPath):
+        if os.path.exists(loadPath):
             
-            ext = os.path.splitext(self.currentPath)[-1]  # obtain extension
+            ext = os.path.splitext(loadPath)[-1]  # obtain extension
             if ext=='.hdf5':
-                ld = load_dict_from_hdf5(self.currentPath)    # function from CaImAn
+                ld = load_dict_from_hdf5(loadPath)    # function from CaImAn
             elif ext=='.mat':
-                ld = loadmat(self.currentPath,squeeze_me=True)
-                # ld = loadmat(self.currentPath,variable_names=['A','C','SNR_comp','r_values','cnn_preds'],squeeze_me=True)
+                ld = loadmat(loadPath,squeeze_me=True)
             else:
                 self.log.error('File extension not yet implemented for loading data!')
                 return False
             
+            self.data_tmp['Cn'] = ld['Cn'].T
             ## load some data necessary for further processing
             self.data_tmp['C'] = ld['C']
             if store_data & np.all([key in ld.keys() for key in ['SNR_comp','r_values','cnn_preds']]):
@@ -465,7 +478,14 @@ class matching:
         ## ensure footprints are stored as sparse matrices to lower computational costs and RAM usage
         if 'csc_matrix' not in str(type(self.A)):
             self.A = sp.sparse.csc_matrix(self.A)
-
+        
+        remap = {
+           'shift':     np.zeros((2,)),
+           'flow':      np.zeros((2,)+self.para['dims']),
+           'c_max':     None,
+           'transposed':False,
+        }
+        
         if align_to_reference:  
             ## align footprints A to reference set A_ref
             
@@ -478,32 +498,31 @@ class matching:
                 A_ref = sp.sparse.csc_matrix(A_ref)
             
             ## test whether images might be transposed (sometimes happens...) and flip accordingly
-            Cn = np.array(self.A.sum(1).reshape(512,512))
-            Cn_ref = np.array(A_ref.sum(1).reshape(512,512))
+            # Cn = np.array(self.A.sum(1).reshape(512,512))
+            # Cn_ref = np.array(A_ref.sum(1).reshape(512,512))
+            Cn = self.data_tmp['Cn']
+            Cn_ref = self.Cn_ref
             c_max,_ = calculate_img_correlation(Cn_ref,Cn,plot_bool=False)
             c_max_T,_ = calculate_img_correlation(Cn_ref,Cn.T,plot_bool=False)
 
             ##  if no good alignment is found, don't include this session in the matching procedure (e.g. if imaging window is shifted too much)
             if (c_max < self.para['min_session_correlation']) & \
               (c_max_T < self.para['min_session_correlation']):
-                print('skipping %s (correlation c=%5.3g too low)'%(self.currentPath,c_max))
-                return False
+                return False, c_max
 
-            # if (c_max_T > c_max) & (c_max_T > self.para['min_session_correlation']):
-            #     print('Transposed image in %s'%self.currentPath)
-            #     self.A = sp.sparse.hstack([img.reshape(self.para['dims']).transpose().reshape(-1,1) for img in self.A.transpose()])
+            if (c_max_T > c_max) & (c_max_T > self.para['min_session_correlation']):
+                print('Transposed image')
+                self.A = sp.sparse.hstack([img.reshape(self.para['dims']).transpose().reshape(-1,1) for img in self.A.transpose()])
+                remap['transposed'] = True
             
             ## calculate rigid shift and optical flow from reduced (cumulative) footprint arrays
-            (x_shift,y_shift),flow,(x_grid,y_grid),_ = get_shift_and_flow(A_ref,self.A,self.para['dims'],projection=1,plot_bool=False)
+            remap['shift'],flow,remap['c_max'] = get_shift_and_flow(A_ref,self.A,self.para['dims'],projection=1,plot_bool=False)
+            remap['flow'][0,...] = flow[...,0]
+            remap['flow'][1,...] = flow[...,1]
 
             ## use shift and flow to align footprints - define reverse mapping
-            if use_opt_flow:
-                x_remap = (x_grid - x_shift + flow[:,:,0])
-                y_remap = (y_grid - y_shift + flow[:,:,1])
-            else:
-                x_remap = (x_grid - x_shift)
-                y_remap = (y_grid - y_shift)
-
+            x_remap,y_remap = build_remap_from_shift_and_flow(self.para['dims'],remap['shift'],remap['flow'] if use_opt_flow else None)
+            
             ## use shift and flow to align footprints - apply reverse mapping
             self.A = sp.sparse.hstack([
                sp.sparse.csc_matrix(                    # cast results to sparse type
@@ -518,7 +537,7 @@ class matching:
         ## finally, apply normalization (watch out! changed normalization to /sum instead of /max)
         # self.A_ref = normalize_sparse_array(self.A_ref)
         self.A = normalize_sparse_array(self.A)
-        return True
+        return True, remap
 
 
     def calculate_statistics(self,s,s_ref,A_ref,binary='half'):
@@ -1083,7 +1102,33 @@ class matching:
       joint_hist_norm_corr = counts/counts.sum(1)[:,np.newaxis,:] * nbins
       
 
-      fig,ax = plt.subplots(2,2)
+      fig,ax = plt.subplots(3,2)
+
+      mean, var = self.get_population_mean_and_var()
+      ax[0][1].plot(self.para['arrays']['correlation'],mean['distance']['NN'],'g',label='lognorm $\mu$')
+      ax[0][1].plot(self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['distance']['nNN'][:,1],'r',label='gauss $\mu$')
+      ax[0][1].set_title('distance models')
+      #plt.plot(self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['distance']['all'][:,2],'g--')
+      #plt.plot(self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['distance']['all'][:,5],'r--')
+      ax[0][1].legend()
+
+      ax[1][0].plot(self.para['arrays']['correlation'],var['distance']['NN'],'g',label='lognorm $\sigma$')
+      ax[1][0].plot(self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['distance']['nNN'][:,0],'r',label='gauss $\sigma$')
+      #plt.plot(self.para['arrays']['correlation'],self.model['fit_parameter']['joint']['distance']['nNN'][:,1],'r--',label='dist $\gamma$')
+      ax[1][0].legend()
+
+      # plt.subplot(222)
+      # plt.plot(self.para['arrays']['distance'],mean['correlation']['NN'],'g',label='lognorm $\mu$')#self.model['fit_parameter']['joint']['correlation']['NN'][:,1],'g')#
+      # plt.plot(self.para['arrays']['distance'],self.model['fit_parameter']['joint']['correlation']['nNN'][:,1],'r',label='gauss $\mu$')
+      # plt.title('correlation models')
+      # plt.legend()
+
+      # plt.subplot(224)
+      # plt.plot(self.para['arrays']['distance'],var['correlation']['NN'],'g',label='lognorm $\sigma$')
+      # plt.plot(self.para['arrays']['distance'],self.model['fit_parameter']['joint']['correlation']['nNN'][:,0],'r',label='gauss $\sigma$')
+      # plt.legend()
+      # plt.tight_layout()
+      # plt.show(block=False)
 
       ax[0][0].axis('off')
 
@@ -1095,47 +1140,47 @@ class matching:
       }
 
       for i,(pop,col) in enumerate(zip(['NN','nNN'],['g','r'])):
-        h['distance'][pop], = ax[0][1].plot(
-            self.para['arrays']['distance'][::2**times],
+        h['distance'][pop], = ax[1][1].plot(
+            self.para['arrays']['distance'][::max(1,2*times)],
             np.zeros(nbins),
             c=col
           )
         
-        h['distance_hist'][pop] = ax[0][1].bar(
-           self.para['arrays']['distance'][::2*times],
+        h['distance_hist'][pop] = ax[1][1].bar(
+           self.para['arrays']['distance'][::max(1,2*times)],
            joint_hist_norm_dist[:,0,i+1],
            width=self.para['arrays']['distance_step']*2**times,
            facecolor=col,
            alpha=0.5,
         )
-      plt.setp(ax[0][1],ylim=[0,2])
+      plt.setp(ax[1][1],ylim=[0,2])
       
 
       for pop,col in zip(['NN','nNN'],['g','r']):
-        h['correlation'][pop], = ax[1][0].plot(
-          self.para['arrays']['correlation'][::2*times],
+        h['correlation'][pop], = ax[2][0].plot(
+          self.para['arrays']['correlation'][::max(1,2*times)],
           np.zeros(nbins),
           color=col
         )
 
-        h['correlation_hist'][pop] = ax[1][0].bar(
-           self.para['arrays']['correlation'][::2*times],
+        h['correlation_hist'][pop] = ax[2][0].bar(
+           self.para['arrays']['correlation'][::max(1,2*times)],
            joint_hist_norm_corr[:,0,i+1],
            width=self.para['arrays']['correlation_step']*2**times,
            facecolor=col,
            alpha=0.5,
         )
-      plt.setp(ax[1][0],ylim=[0,2])
+      plt.setp(ax[2][0],ylim=[0,2])
       
-      ax[1][1].imshow(
+      ax[2][1].imshow(
          counts[...,0],
          origin='lower',aspect='auto',
          extent=tuple(self.para['arrays']['correlation'][[0,-1]])+tuple(self.para['arrays']['distance'][[0,-1]])
         )
 
-      h['distance_marker'] = ax[1][1].axhline(0,c='r')
-      h['correlation_marker'] = ax[1][1].axvline(0,c='r')
-      plt.setp(ax[1][1],xlim=self.para['arrays']['correlation'][[0,-1]],ylim=self.para['arrays']['distance'][[0,-1]])
+      h['distance_marker'] = ax[2][1].axhline(0,c='r')
+      h['correlation_marker'] = ax[2][1].axvline(0,c='r')
+      plt.setp(ax[2][1],xlim=self.para['arrays']['correlation'][[0,-1]],ylim=self.para['arrays']['distance'][[0,-1]])
 
       slider_h = 0.02
       slider_w = 0.35
@@ -1203,7 +1248,7 @@ class matching:
                 max_val = max(max_val,height)
             h['distance_marker'].set_ydata(self.para['arrays']['distance'][n])
 
-          plt.setp(ax[1][0],ylim=[0,max_val*1.1])
+          plt.setp(ax[2][0],ylim=[0,max_val*1.1])
           fig.canvas.draw_idle()
 
       distance_init = 10
@@ -1216,13 +1261,13 @@ class matching:
       self.slider['distance'].on_changed(update_plot_distance)
       self.slider['correlation'].on_changed(update_plot_correlation)
 
-      # update_plot_distance(distance_init)
-      # update_plot_correlation(correlation_init)
+      update_plot_distance(distance_init)
+      update_plot_correlation(correlation_init)
 
       plt.show(block=False)
 
 
-    def plot_model(self,sv=False,suffix=''):
+    def plot_model(self,sv=False,suffix='',times=1):
 
       rc('font',size=10)
       rc('axes',labelsize=12)
@@ -1230,32 +1275,36 @@ class matching:
       rc('ytick',labelsize=8)
 
       key_counts = 'counts' if self.para['model']=='shifted' else 'counts_unshifted'
-      nbins = self.model[key_counts].shape[0]
+      counts = scale_down_counts(self.model[key_counts],times)
+      nbins = counts.shape[0]
 
-      X, Y = np.meshgrid(self.para['arrays']['correlation'], self.para['arrays']['distance'])
+      arrays = self.build_arrays(nbins)
+
+      X, Y = np.meshgrid(arrays['correlation'], arrays['distance'])
 
       fig = plt.figure(figsize=(7,4),dpi=150)
       ax_phase = plt.axes([0.3,0.13,0.2,0.4])
       add_number(fig,ax_phase,order=1,offset=[-250,200])
       #ax_phase.imshow(self.model[key_counts][:,:,0],extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',clim=[0,0.25*self.model[key_counts][:,:,0].max()],origin='lower')
-      NN_ratio = self.model[key_counts][:,:,1]/self.model[key_counts][:,:,0]
+      NN_ratio = counts[:,:,1]/counts[:,:,0]
       cmap = plt.cm.RdYlGn
       NN_ratio = cmap(NN_ratio)
-      NN_ratio[...,-1] = np.minimum(self.model[key_counts][...,0]/100,1)
+      NN_ratio[...,-1] = np.minimum(counts[...,0]/(np.max(counts)/3.),1)
 
       im_ratio = ax_phase.imshow(NN_ratio,extent=[0,1,0,self.para['neighbor_distance']],aspect='auto',clim=[0,0.5],origin='lower')
       nlev = 3
       # col = (np.ones((nlev,3)).T*np.linspace(0,1,nlev)).T
       # p_levels = ax_phase.contour(X,Y,self.model['p_same']['joint'],levels=[0.05,0.5,0.95],colors='b',linestyles=[':','--','-'])
-      ax_phase.set_xlim([0,1])
-      ax_phase.set_ylim([0,self.para['neighbor_distance']])
+      plt.setp(
+          ax_phase,xlim=[0,1],ylim=[0,self.para['neighbor_distance']],
+          xlabel='correlation',
+          ylabel='distance'
+        )
       ax_phase.tick_params(axis='x',which='both',bottom=True,top=True,labelbottom=False,labeltop=True)
       ax_phase.tick_params(axis='y',which='both',left=True,right=True,labelright=False,labelleft=True)
       ax_phase.yaxis.set_label_position("right")
       #ax_phase.xaxis.tick_top()
-      ax_phase.set_xlabel('correlation')
       ax_phase.xaxis.set_label_coords(0.5,-0.15)
-      ax_phase.set_ylabel('distance')
       ax_phase.yaxis.set_label_coords(1.15,0.5)
 
       im_ratio.cmap = cmap
@@ -1275,26 +1324,26 @@ class matching:
 
       ax_dist = plt.axes([0.05,0.13,0.2,0.4])
 
-      ax_dist.barh(self.para['arrays']['distance'],self.model[key_counts][...,0].sum(1).flat,self.para['neighbor_distance']/nbins,facecolor='k',alpha=0.5,orientation='horizontal')
-      ax_dist.barh(self.para['arrays']['distance'],self.model[key_counts][...,2].sum(1),self.para['arrays']['distance_step'],facecolor='salmon',alpha=0.5)
-      ax_dist.barh(self.para['arrays']['distance'],self.model[key_counts][...,1].sum(1),self.para['arrays']['distance_step'],facecolor='lightgreen',alpha=0.5)
+      ax_dist.barh(arrays['distance'],counts[...,0].sum(1).flat,self.para['neighbor_distance']/nbins,facecolor='k',alpha=0.5,orientation='horizontal')
+      ax_dist.barh(arrays['distance'],counts[...,2].sum(1),arrays['distance_step'],facecolor='salmon',alpha=0.5)
+      ax_dist.barh(arrays['distance'],counts[...,1].sum(1),arrays['distance_step'],facecolor='lightgreen',alpha=0.5)
       ax_dist.invert_xaxis()
-      #h_d_move = ax_dist.bar(self.para['arrays']['distance'],np.zeros(nbins),self.para['arrays']['distance_step'],facecolor='k')
+      #h_d_move = ax_dist.bar(arrays['distance'],np.zeros(nbins),arrays['distance_step'],facecolor='k')
 
       model_distance_all = (fun_wrapper(
           self.model['fit_function']['single']['distance']['NN'],
-          self.para['arrays']['distance'],
+          arrays['distance'],
           self.model['fit_parameter']['single']['distance']['NN']
-        )*self.model[key_counts][...,1].sum() + fun_wrapper(self.model['fit_function']['single']['distance']['nNN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['nNN'])*self.model[key_counts][...,2].sum())*self.para['arrays']['distance_step']
+        )*counts[...,1].sum() + fun_wrapper(self.model['fit_function']['single']['distance']['nNN'],arrays['distance'],self.model['fit_parameter']['single']['distance']['nNN'])*counts[...,2].sum())*arrays['distance_step']
 
-      ax_dist.plot(fun_wrapper(self.model['fit_function']['single']['distance']['all'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['all'])*self.model[key_counts][...,0].sum()*self.para['arrays']['distance_step'],self.para['arrays']['distance'],'k:')
-      ax_dist.plot(model_distance_all,self.para['arrays']['distance'],'k')
+      ax_dist.plot(fun_wrapper(self.model['fit_function']['single']['distance']['all'],arrays['distance'],self.model['fit_parameter']['single']['distance']['all'])*counts[...,0].sum()*arrays['distance_step'],arrays['distance'],'k:')
+      ax_dist.plot(model_distance_all,arrays['distance'],'k')
 
-      ax_dist.plot(fun_wrapper(self.model['fit_function']['single']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['all'][1:3])*self.model['fit_parameter']['single']['distance']['all'][0]*self.model[key_counts][...,0].sum()*self.para['arrays']['distance_step'],self.para['arrays']['distance'],'g')
-      ax_dist.plot(fun_wrapper(self.model['fit_function']['single']['distance']['NN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['NN'])*self.model[key_counts][...,1].sum()*self.para['arrays']['distance_step'],self.para['arrays']['distance'],'g:')
+      ax_dist.plot(fun_wrapper(self.model['fit_function']['single']['distance']['NN'],arrays['distance'],self.model['fit_parameter']['single']['distance']['all'][1:3])*self.model['fit_parameter']['single']['distance']['all'][0]*counts[...,0].sum()*arrays['distance_step'],arrays['distance'],'g')
+      ax_dist.plot(fun_wrapper(self.model['fit_function']['single']['distance']['NN'],arrays['distance'],self.model['fit_parameter']['single']['distance']['NN'])*counts[...,1].sum()*arrays['distance_step'],arrays['distance'],'g:')
 
-      ax_dist.plot(fun_wrapper(self.model['fit_function']['single']['distance']['nNN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['all'][3:])*(1-self.model['fit_parameter']['single']['distance']['all'][0])*self.model[key_counts][...,0].sum()*self.para['arrays']['distance_step'],self.para['arrays']['distance'],'r')
-      ax_dist.plot(fun_wrapper(self.model['fit_function']['single']['distance']['nNN'],self.para['arrays']['distance'],self.model['fit_parameter']['single']['distance']['nNN'])*self.model[key_counts][...,2].sum()*self.para['arrays']['distance_step'],self.para['arrays']['distance'],'r',linestyle=':')
+      ax_dist.plot(fun_wrapper(self.model['fit_function']['single']['distance']['nNN'],arrays['distance'],self.model['fit_parameter']['single']['distance']['all'][3:])*(1-self.model['fit_parameter']['single']['distance']['all'][0])*counts[...,0].sum()*arrays['distance_step'],arrays['distance'],'r')
+      ax_dist.plot(fun_wrapper(self.model['fit_function']['single']['distance']['nNN'],arrays['distance'],self.model['fit_parameter']['single']['distance']['nNN'])*counts[...,2].sum()*arrays['distance_step'],arrays['distance'],'r',linestyle=':')
       ax_dist.set_ylim([0,self.para['neighbor_distance']])
       ax_dist.set_xlabel('counts')
       ax_dist.spines['left'].set_visible(False)
@@ -1302,21 +1351,16 @@ class matching:
       ax_dist.tick_params(axis='y',which='both',left=False,right=True,labelright=False,labelleft=False)
 
       ax_corr = plt.axes([0.3,0.63,0.2,0.325])
-      ax_corr.bar(self.para['arrays']['correlation'],self.model[key_counts][...,0].sum(0).flat,1/nbins,facecolor='k',alpha=0.5)
-      ax_corr.bar(self.para['arrays']['correlation'],self.model[key_counts][...,2].sum(0),1/nbins,facecolor='salmon',alpha=0.5)
-      ax_corr.bar(self.para['arrays']['correlation'],self.model[key_counts][...,1].sum(0),1/nbins,facecolor='lightgreen',alpha=0.5)
+      ax_corr.bar(arrays['correlation'],counts[...,0].sum(0).flat,1/nbins,facecolor='k',alpha=0.5)
+      ax_corr.bar(arrays['correlation'],counts[...,2].sum(0),1/nbins,facecolor='salmon',alpha=0.5)
+      f_NN = fun_wrapper(self.model['fit_function']['single']['correlation']['NN'],arrays['correlation'],self.model['fit_parameter']['single']['correlation']['NN'])
+      f_nNN = fun_wrapper(self.model['fit_function']['single']['correlation']['nNN'],arrays['correlation'],self.model['fit_parameter']['single']['correlation']['nNN'])
+      model_fp_correlation_all = (f_NN*counts[...,1].sum() + f_nNN*counts[...,2].sum())*arrays['correlation_step']
+      #ax_corr.plot(arrays['correlation'],fun_wrapper(self.model['fit_function']['correlation']['all'],arrays['correlation'],self.model['fit_parameter']['single']['correlation']['all'])*counts[...,0].sum()*arrays['correlation_step'],'k')
+      ax_corr.plot(arrays['correlation'],model_fp_c1r(self.model['fit_function']['single']['correlation']['NN'],arrays['correlation'],self.model['fit_parameter']['single']['correlation']['NN'])*counts[...,1].sum()*arrays['correlation_step'],'g')
 
-      f_NN = fun_wrapper(self.model['fit_function']['single']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['NN'])
-      f_nNN = fun_wrapper(self.model['fit_function']['single']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['nNN'])
-      model_fp_correlation_all = (f_NN*self.model[key_counts][...,1].sum() + f_nNN*self.model[key_counts][...,2].sum())*self.para['arrays']['correlation_step']
-      #ax_corr.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['correlation']['all'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['all'])*self.model[key_counts][...,0].sum()*self.para['arrays']['correlation_step'],'k')
-      ax_corr.plot(self.para['arrays']['correlation'],model_fp_correlation_all,'k')
-
-      #ax_corr.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['all'][1:3])*self.model['fit_parameter']['single']['correlation']['all'][0]*self.model[key_counts][...,0].sum()*self.para['arrays']['correlation_step'],'g')
-      ax_corr.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['single']['correlation']['NN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['NN'])*self.model[key_counts][...,1].sum()*self.para['arrays']['correlation_step'],'g')
-
-      #ax_corr.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['all'][3:])*(1-self.model['fit_parameter']['single']['correlation']['all'][0])*self.model[key_counts][...,0].sum()*self.para['arrays']['correlation_step'],'r')
-      ax_corr.plot(self.para['arrays']['correlation'],fun_wrapper(self.model['fit_function']['single']['correlation']['nNN'],self.para['arrays']['correlation'],self.model['fit_parameter']['single']['correlation']['nNN'])*self.model[key_counts][...,2].sum()*self.para['arrays']['correlation_step'],'r')
+      #ax_corr.plot(arrays['correlation'],fun_wrapper(self.model['fit_function']['correlation']['nNN'],arrays['correlation'],self.model['fit_parameter']['single']['correlation']['all'][3:])*(1-self.model['fit_parameter']['single']['correlation']['all'][0])*counts[...,0].sum()*arrays['correlation_step'],'r')
+      ax_corr.plot(arrays['correlation'],fun_wrapper(self.model['fit_function']['single']['correlation']['nNN'],arrays['correlation'],self.model['fit_parameter']['single']['correlation']['nNN'])*counts[...,2].sum()*arrays['correlation_step'],'r')
 
       ax_corr.set_ylabel('counts')
       ax_corr.set_xlim([0,1])
@@ -1846,12 +1890,11 @@ class matching:
       t_start = time.time()
       cmap = 'viridis'
 
-      self.currentPath = self.para['paths'][s_ref]
-      self.A_ref = self.load_footprints(s_ref)
-      self.currentPath = self.para['paths'][s]
-      self.A = self.load_footprints(s)
+      self.A_ref = self.load_footprints(self.para['paths'][s_ref],s_ref)
+      # Cn = self.A_ref.sum(1).reshape(512,512)
+      Cn = self.data_tmp['Cn']
+      self.A = self.load_footprints(self.para['paths'][s],s)
 
-      Cn = self.A_ref.sum(1).reshape(512,512)
 
       level = 0.1
       plt.figure(figsize=(15,12))
@@ -2053,6 +2096,790 @@ class matching:
           plt.savefig(path,format=ext,dpi=300)
 
 
+    def plot_cluster_stats(self):
+
+        print('### Plotting ROI and cluster statistics of matching ###')
+
+        # idx_unsure = cluster.stats['match_score'][...,0]<(cluster.stats['match_score'][...,1]+0.5)
+
+        nC,nSes = self.results['assignments'].shape
+        active = ~np.isnan(self.results['assignments'])
+
+        idx_unsure = self.results['p_matched']<0.95
+
+        fig = plt.figure(figsize=(7,4),dpi=300)
+
+        nDisp = 20
+        ax_3D = plt.subplot(221,projection='3d')
+        # ax_3D.set_position([0.2,0.5,0.2,0.3])
+        ##fig.gca(projection='3d')
+        #a = np.arange(30)
+        #for c in range(30):
+        
+        n_arr = np.random.choice(np.where(active.sum(1)>10)[0],nDisp)
+        # n_arr = np.random.randint(0,cluster.meta['nC'],nDisp)
+        cmap = get_cmap('tab20')
+        ax_3D.set_prop_cycle(color=cmap.colors)
+        # print(self.results['cm'][n_arr,:,0],self.results['cm'][n_arr,:,0].shape)
+        for n in n_arr:
+          ax_3D.scatter(self.results['cm'][n,:,0],self.results['cm'][n,:,1],np.arange(nSes),s=0.5)#linewidth=2)
+        ax_3D.set_xlim([0,512*self.para['pxtomu']])
+        ax_3D.set_ylim([0,512*self.para['pxtomu']])
+
+        ax_3D.set_xlabel('x [$\mu$m]')
+        ax_3D.set_ylabel('y [$\mu$m]')
+        ax_3D.invert_zaxis()
+        # ax_3D.zaxis._axinfo['label']['space_factor'] = 2.8
+        ax_3D.set_zlabel('session')
+
+        ax_proxy = plt.axes([0.1,0.925,0.01,0.01])
+        add_number(fig,ax_proxy,order=1,offset=[-50,25])
+        ax_proxy.spines[['top','right','bottom','left']].set_visible(False)
+        # pl_dat.remove_frame(ax_proxy)
+        ax_proxy.set_xticks([])
+        ax_proxy.set_yticks([])
+
+        #ax = plt.subplot(243)
+        ax = plt.axes([0.65,0.65,0.125,0.275])
+        add_number(fig,ax,order=2,offset=[-50,25])
+        dx = np.diff(self.results['cm'][...,0],axis=1)*self.para['pxtomu']
+        ax.hist(dx.flatten(),np.linspace(-10,10,101),facecolor='tab:blue',alpha=0.5)
+        ax.hist(dx[idx_unsure[:,1:]].flatten(),np.linspace(-10,10,101),facecolor='tab:red',alpha=0.5)
+        ax.set_xlabel('$\Delta$x [$\mu$m]')
+        ax.set_ylabel('density')
+        ax.spines[['top','left','right']].set_visible(False)
+        ax.set_ylim([0,10000])
+        ax.set_yticks([])
+
+        #ax = plt.subplot(244)
+        ax = plt.axes([0.8,0.65,0.125,0.275])
+        dy = np.diff(self.results['cm'][...,1],axis=1)*self.para['pxtomu']
+        ax.hist(dy.flatten(),np.linspace(-10,10,101),facecolor='tab:blue',alpha=0.5)
+        ax.hist(dy[idx_unsure[:,1:]].flatten(),np.linspace(-10,10,101),facecolor='tab:red',alpha=0.5)
+        ax.set_xlabel('$\Delta$y [$\mu$m]')
+        ax.spines[['top','left','right']].set_visible(False)
+        ax.set_ylim([0,10000])
+        ax.set_yticks([])
+
+        ax = plt.axes([0.73,0.85,0.075,0.05])
+        ax.hist(dx.flatten(),np.linspace(-10,10,101),facecolor='tab:blue',alpha=0.5)
+        ax.hist(dx[idx_unsure[:,1:]].flatten(),np.linspace(-10,10,101),facecolor='tab:red',alpha=0.5)
+        # ax.set_xlabel('$\Delta$x [$\mu$m]',fontsize=10)
+        ax.set_yticks([])
+        ax.spines[['top','left','right']].set_visible(False)
+        ax.set_ylim([0,500])
+
+        ax = plt.axes([0.88,0.85,0.075,0.05])
+        ax.hist(dy.flatten(),np.linspace(-10,10,101),facecolor='tab:blue',alpha=0.5)
+        ax.hist(dy[idx_unsure[:,1:]].flatten(),np.linspace(-10,10,101),facecolor='tab:red',alpha=0.5)
+        # ax.set_xlabel('$\Delta$y [$\mu$m]',fontsize=10)
+        ax.spines[['top','left','right']].set_visible(False)
+        ax.set_ylim([0,500])
+        ax.set_yticks([])
+
+        ROI_diff = np.full((nC,nSes,2),np.NaN)
+        com_ref = np.full((nC,2),np.NaN)
+        for n in range(nC):
+            s_ref = np.where(active[n,:])[0]
+            if len(s_ref)>0:
+                com_ref[n,:] = self.results['cm'][n,s_ref[0],:]
+                ROI_diff[n,:nSes-s_ref[0],:] = self.results['cm'][n,s_ref[0]:,:]-com_ref[n,:]
+                # print('neuron %d, first session: %d, \tposition: (%.2f,%.2f)'%(n,s_ref[0],com_ref[n,0],com_ref[n,1]))
+
+        ax_mv = plt.axes([0.1,0.11,0.35,0.3])
+        add_number(fig,ax_mv,order=3,offset=[-75,50])
+        # ROI_diff = (self.results['cm'].transpose(1,0,2)-self.results['cm'][:,0,:]).transpose(1,0,2)#*cluster.para['pxtomu']
+        # for n in range(nC):
+            # ROI_diff[n,:]
+        # ROI_diff = (self.results['cm'].transpose(1,0,2)-com_ref).transpose(1,0,2)#*cluster.para['pxtomu']
+        ROI_diff_abs = np.array([np.sqrt(x[:,0]**2+x[:,1]**2) for x in ROI_diff])
+        # ROI_diff_abs[~cluster.status[...,1]] = np.NaN
+
+
+        for n in n_arr:
+            ax_mv.plot(range(nSes),ROI_diff_abs[n,:],linewidth=0.5,color=[0.6,0.6,0.6])
+        ax_mv.plot(range(nSes),ROI_diff_abs[n,:]*np.NaN,linewidth=0.5,color=[0.6,0.6,0.6],label='displacement')
+
+        plot_with_confidence(ax_mv,range(nSes),np.nanmean(ROI_diff_abs,0),np.nanstd(ROI_diff_abs,0),col='tab:red',ls='-',label='average')
+        ax_mv.set_xlabel('session')
+        ax_mv.set_ylabel('$\Delta$d [$\mu$m]')
+        ax_mv.set_ylim([0,11])
+        ax_mv.legend(fontsize=10)
+        ax_mv.spines[['top','right']].set_visible(False)
+
+        idx_c_unsure = idx_unsure.any(1)
+
+        ax_mv_max = plt.axes([0.6,0.11,0.35,0.325])
+        add_number(fig,ax_mv_max,order=4,offset=[-75,50])
+        ROI_max_mv = np.nanmax(ROI_diff_abs,1)
+        ax_mv_max.hist(ROI_max_mv,np.linspace(0,20,41),facecolor='tab:blue',alpha=0.5,label='certain')
+        ax_mv_max.hist(ROI_max_mv[idx_c_unsure],np.linspace(0,20,41),facecolor='tab:red',alpha=0.5,label='uncertain')
+        ax_mv_max.set_xlabel('max($\Delta$d) [$\mu$m]')
+        ax_mv_max.set_ylabel('# cluster')
+        ax_mv_max.legend(fontsize=10)
+
+        ax_mv_max.spines[['top','right']].set_visible(False)
+
+        plt.tight_layout()
+        plt.show(block=False)
+
+        # if sv:
+            # pl_dat.save_fig('ROI_positions')
+
+
+    def plot_match_statistics(self):
+
+        print('### Plotting matching score statistics ###')
+
+        print('now add example how to calculate footprint correlation(?), sketch how to fill cost-matrix')
+        
+        s = 15
+        margins = 20
+
+        nC,nSes = self.results['assignments'].shape
+        sessions_bool = np.ones(nSes,'bool')
+        active = ~np.isnan(self.results['assignments'])
+
+        D_ROIs = sp.spatial.distance.squareform(sp.spatial.distance.pdist(self.results['cm'][:,s,:]))
+        np.fill_diagonal(D_ROIs,np.NaN)
+
+        idx_dense = np.where((np.sum(D_ROIs<margins,1)<=8) & active[:,s] & active[:,s+1])[0]
+        c = np.random.choice(idx_dense)
+        # c = idx_dense[0]
+        # c = 375
+        # print(c)
+        # print(cluster.IDs['neuronID'][c,s,1])
+        n = int(self.results['assignments'][c,s])
+        #n = 328
+        print(c,n)
+        fig = plt.figure(figsize=(7,4),dpi=150)
+        props = dict(boxstyle='round', facecolor='w', alpha=0.8)
+
+        ## plot ROIs from a single session
+
+        # c = np.where(cluster.IDs['neuronID'][:,s,1] == n)[0][0]
+        # idx_close = np.where(D_ROIs[c,:]<margins*2)[0]
+
+        n_close = self.results['assignments'][D_ROIs[c,:]<margins*1.5,s].astype('int')
+
+        print('load from %s'%self.para['paths'][s])
+        A = self.load_footprints(self.para['paths'][s],None)
+        Cn = self.data_tmp['Cn']
+        
+        x,y = self.results['cm'][c,s,:].astype('int')
+        print(x,y)
+
+        # x = int(self.results['cm'][c,s,0])#+cluster.sessions['shift'][s,0])
+        # y = int(self.results['cm'][c,s,1])#+cluster.sessions['shift'][s,1])
+        # x = int(cm[0])#-cluster.sessions['shift'][s,0])
+        # y = int(cm[1])#-cluster.sessions['shift'][s,1])
+
+        ax_ROIs1 = plt.axes([0.05,0.55,0.25,0.4])
+        add_number(fig,ax_ROIs1,order=1,offset=[-25,25])
+
+        #margins = 10
+        Cn_tmp = Cn[y-margins:y+margins,x-margins:x+margins]
+        Cn -= Cn_tmp.min()
+        Cn_tmp -= Cn_tmp.min()
+        Cn /= Cn_tmp.max()
+
+        ax_ROIs1.imshow(Cn,origin='lower',clim=[0,1])
+        An = A[...,n].reshape(self.para['dims']).toarray()
+        for nn in n_close:
+            cc = np.where(self.results['assignments'][:,s]==nn)[0]
+            print(cc,nn)
+            # print('SNR: %.2g'%cluster.stats['SNR'][cc,s])
+            ax_ROIs1.contour(A[...,nn].reshape(self.para['dims']).toarray(),[0.2*A[...,nn].max()],colors='w',linestyles='--',linewidths=1)
+        ax_ROIs1.contour(An,[0.2*An.max()],colors='w',linewidths=3)
+        # ax_ROIs1.plot(cluster.sessions['com'][c,s,0],cluster.sessions['com'][c,s,1],'kx')
+
+        # sbar = ScaleBar(530.68/512 *10**(-6),location='lower right')
+        # ax_ROIs1.add_artist(sbar)
+        ax_ROIs1.set_xlim([x-margins,x+margins])
+        ax_ROIs1.set_ylim([y-margins,y+margins])
+        ax_ROIs1.text(x-margins+3,y+margins-5,'Session s',bbox=props,fontsize=10)
+        ax_ROIs1.set_xticklabels([])
+        ax_ROIs1.set_yticklabels([])
+
+        # plt.show(block=False)
+        # return
+        D_ROIs_cross = sp.spatial.distance.cdist(self.results['cm'][:,s,:],self.results['cm'][:,s+1,:])
+        n_close = self.results['assignments'][D_ROIs_cross[c,:]<margins*2,s+1].astype('int')
+
+        A = self.load_footprints(self.para['paths'][s+1],None)
+        
+        ## plot ROIs of session 2 compared to one of session 1
+
+        #Cn = cv2.remap(Cn,x_remap,y_remap, interpolation=cv2.INTER_CUBIC)
+
+        shift = np.array(self.data[s+1]['remap']['shift']) - np.array(self.data[s]['remap']['shift'])
+        # y_shift = self.data[s+1]['remap']['shift'][0] - self.data[s]['remap']['shift'][0]
+        print('shift',shift)
+
+        x_remap,y_remap = build_remap_from_shift_and_flow(self.para['dims'],shift)
+
+        # x_grid, y_grid = np.meshgrid(np.arange(0., cluster.meta['dims'][0]).astype(np.float32), np.arange(0., cluster.meta['dims'][1]).astype(np.float32))
+        # x_remap = (x_grid - \
+        #               cluster.sessions['shift'][s+1,0] + cluster.sessions['shift'][s,0] + \
+        #               cluster.sessions['flow_field'][s+1,:,:,0] - cluster.sessions['flow_field'][s,:,:,0]).astype('float32')
+        # y_remap = (y_grid - \
+        #               cluster.sessions['shift'][s+1,1] + cluster.sessions['shift'][s,1] + \
+        #               cluster.sessions['flow_field'][s+1,:,:,1] - cluster.sessions['flow_field'][s,:,:,1]).astype('float32')
+        # # Cn = cv2.remap(Cn,x_remap,y_remap, interpolation=cv2.INTER_CUBIC)
+
+        ax_ROIs2 = plt.axes([0.35,0.55,0.25,0.4])
+        add_number(fig,ax_ROIs2,order=2,offset=[-25,25])
+        ax_ROIs2.imshow(Cn,origin='lower',clim=[0,1])
+        n_match = int(self.results['assignments'][c,s+1])
+        for nn in n_close:
+            cc = np.where(self.results['assignments'][:,s+1]==nn)
+            # print('SNR: %.2g'%cluster.stats['SNR'][cc,s+1])
+            if (not (nn==n_match)):# & (cluster.stats['SNR'][cc,s+1]>3):
+                A_tmp = cv2.remap(A[...,nn].reshape(self.para['dims']).toarray(),x_remap,y_remap, interpolation=cv2.INTER_CUBIC)
+            # A_tmp = A[...,nn].reshape(self.para['dims']).toarray()
+                ax_ROIs2.contour(A_tmp,[0.2*A_tmp.max()],colors='r',linestyles='--',linewidths=1)
+        ax_ROIs2.contour(An,[0.2*An.max()],colors='w',linewidths=3)
+        A_tmp = cv2.remap(A[...,n_match].reshape(self.para['dims']).toarray(),x_remap,y_remap, interpolation=cv2.INTER_CUBIC)
+        # A_tmp = A[...,n_match].reshape(self.para['dims']).toarray()
+        ax_ROIs2.contour(A_tmp,[0.2*A_tmp.max()],colors='g',linewidths=3)
+
+        ax_ROIs2.set_xlim([x-margins,x+margins])
+        ax_ROIs2.set_ylim([y-margins,y+margins])
+        ax_ROIs2.text(x-margins+3,y+margins-5,'Session s+1',bbox=props,fontsize=10)
+        ax_ROIs2.set_xticklabels([])
+        ax_ROIs2.set_yticklabels([])
+
+        ax_zoom1 = plt.axes([0.075,0.125,0.225,0.275])
+        add_number(fig,ax_zoom1,order=3,offset=[-50,25])
+        ax_zoom1.hist(D_ROIs.flatten(),np.linspace(0,15,31),facecolor='k',density=True)
+        ax_zoom1.set_xlabel('distance [$\mu$m]')
+        ax_zoom1.spines[['top','left','right']].set_visible(False)
+        ax_zoom1.set_yticks([])
+        ax_zoom1.set_ylabel('counts')
+
+        ax = plt.axes([0.1,0.345,0.075,0.125])
+        plt.hist(D_ROIs.flatten(),np.linspace(0,np.sqrt(2*512**2),101),facecolor='k',density=True)
+        ax.set_xlabel('d [$\mu$m]',fontsize=10)
+        ax.spines[['top','left','right']].set_visible(False)        
+        ax.set_yticks([])
+
+        D_matches = np.copy(D_ROIs_cross.diagonal())
+        np.fill_diagonal(D_ROIs_cross,np.NaN)
+
+        ax_zoom2 = plt.axes([0.35,0.125,0.225,0.275])
+        add_number(fig,ax_zoom2,order=4,offset=[-50,25])
+        ax_zoom2.hist(D_ROIs_cross.flatten(),np.linspace(0,15,31),facecolor='tab:red',alpha=0.5)
+        ax_zoom2.hist(D_ROIs.flatten(),np.linspace(0,15,31),facecolor='k',edgecolor='k',histtype='step')
+        ax_zoom2.hist(D_matches,np.linspace(0,15,31),facecolor='tab:green',alpha=0.5)
+        ax_zoom2.set_xlabel('distance [$\mu$m]')
+        ax_zoom2.spines[['top','left','right']].set_visible(False)
+        ax_zoom2.set_yticks([])
+
+        ax = plt.axes([0.38,0.345,0.075,0.125])
+        ax.hist(D_ROIs_cross.flatten(),np.linspace(0,np.sqrt(2*512**2),101),facecolor='tab:red',alpha=0.5)
+        ax.hist(D_matches,np.linspace(0,np.sqrt(2*512**2),101),facecolor='tab:green',alpha=0.5)
+        ax.set_xlabel('d [$\mu$m]',fontsize=10)
+        ax.spines[['top','left','right']].set_visible(False)
+        ax.set_yticks([])
+
+        plt.show(block=False)
+        return
+
+        ax = plt.axes([0.7,0.775,0.25,0.125])#ax_sc1.twinx()
+        add_number(fig,ax,order=5,offset=[-75,50])
+        ax.hist(cluster.stats['match_score'][:,:,0].flat,np.linspace(0,1,51),facecolor='tab:blue',alpha=1,label='$p^*$')
+        ax.hist(cluster.stats['match_score'][:,:,1].flat,np.linspace(0,1,51),facecolor='tab:orange',alpha=1,label='max($p\\backslash p^*$)')
+        #ax.invert_yaxis()
+        ax.set_xlim([0,1])
+        ax.set_yticks([])
+        ax.set_xlabel('p')
+        ax.legend(fontsize=8,bbox_to_anchor=[0.3,0.2],loc='lower left',handlelength=1)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+
+
+        ax_sc1 = plt.axes([0.7,0.45,0.25,0.125])
+        add_number(fig,ax_sc1,order=6,offset=[-75,50])
+        # ax = plt.axes([0.925,0.85,0.225,0.05])#ax_sc1.twiny()
+        # ax.set_xticks([])
+        # ax.spines['top'].set_visible(False)
+        # ax.spines['right'].set_visible(False)
+
+        ax_sc1.plot(cluster.stats['match_score'][:,:,1].flat,cluster.stats['match_score'][:,:,0].flat,'.',markeredgewidth=0,color='k',markersize=1)
+        ax_sc1.plot([0,1],[0,1],'--',color='tab:red',lw=1)
+        # ax_sc1.plot([0,0.45],[0.5,0.95],'--',color='tab:blue',lw=2)
+        # ax_sc1.plot([0.45,1],[0.95,0.95],'--',color='tab:blue',lw=2)
+        ax_sc1.set_ylabel('$p^{\\asterisk}$')
+        ax_sc1.set_xlabel('max($p\\backslash p^*$)')
+        ax_sc1.set_xlim([0,1])
+        ax_sc1.set_ylim([0.5,1])
+        ax_sc1.spines['top'].set_visible(False)
+        ax_sc1.spines['right'].set_visible(False)
+
+
+        ax_sc2 = plt.axes([0.7,0.125,0.25,0.125])
+        add_number(fig,ax_sc2,order=7,offset=[-75,50])
+        #plt.hist(np.nanmean(self.results['p_matched'],1),np.linspace(0,1,51))
+        ax = ax_sc2.twinx()
+        ax.hist(np.nanmin(cluster.stats['match_score'][:,:,0],1),np.linspace(0,1,51),facecolor='tab:red',alpha=0.3)
+        ax.set_yticks([])
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        ax = ax_sc2.twiny()
+        ax.hist(np.nanmean(cluster.stats['match_score'][:,:,0],axis=1),np.linspace(0,1,51),facecolor='tab:blue',orientation='horizontal',alpha=0.3)
+        ax.set_xticks([])
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        ax_sc2.plot(np.nanmin(cluster.stats['match_score'][:,:,0],1),np.nanmean(cluster.stats['match_score'][:,:,0],axis=1),'.',markeredgewidth=0,color='k',markersize=1)
+        ax_sc2.set_xlabel('min($p^{\\asterisk}$)')
+        ax_sc2.set_ylabel('$\left\langle p^{\\asterisk} \\right\\rangle$')
+        ax_sc2.set_xlim([0.5,1])
+        ax_sc2.set_ylim([0.5,1])
+        ax_sc2.spines['top'].set_visible(False)
+        ax_sc2.spines['right'].set_visible(False)
+
+
+        # ax = plt.subplot(248)
+        # ax.plot([0,1],[0,1],'--',color='r')
+        # ax.scatter(cluster.stats['match_score'][:,:,0],cluster.stats['match_score'][:,:,1],s=1,color='k')
+        # ax.set_xlim([0.3,1])
+        # ax.set_ylim([-0.05,1])
+        # ax.yaxis.tick_right()
+        # ax.yaxis.set_label_position("right")
+        # ax.set_xlabel('matched score',fontsize=14)
+        # ax.set_ylabel('2nd best score',fontsize=14)
+        # pl_dat.remove_frame(ax,['top'])
+        #
+        # ax = plt.subplot(244)
+        # #ax.hist(cluster.sessions['match_score'][...,1].flatten(),np.linspace(0,1,101),facecolor='r',alpha=0.5)
+        # ax.hist(cluster.stats['match_score'][...,0].flatten(),np.linspace(0,1,101),facecolor='k',alpha=0.5,density=True,label='match score')
+        # pl_dat.remove_frame(ax,['left','right','top'])
+        # ax.yaxis.set_label_position("right")
+        # #ax.yaxis.tick_right()
+        # ax.set_xlim([0.3,1])
+        # ax.set_xticks([])
+        # ax.set_ylabel('density',fontsize=14)
+        # ax.legend(loc='upper left',fontsize=10)
+        #
+        # ax = plt.subplot(247)
+        # ax.hist(cluster.stats['match_score'][...,1].flatten(),np.linspace(0,1,101),facecolor='k',alpha=0.5,density=True,orientation='horizontal',label='2nd best score')
+        # #ax.hist(cluster.sessions['match_score'][...,0].flatten(),np.linspace(0,1,101),facecolor='k',alpha=0.5)
+        # pl_dat.remove_frame(ax,['left','bottom','top'])
+        # ax.set_ylim([-0.05,1])
+        # ax.set_xlim([1.2,0])
+        # ax.set_yticks([])
+        # ax.legend(loc='upper right',fontsize=10)
+        # ax.set_xlabel('density',fontsize=14)
+
+        plt.tight_layout()
+        plt.show(block=False)
+
+        if sv:
+            pl_dat.save_fig('match_stats')
+
+    
+    def plot_alignment_statistics(self,s_compare):
+
+        print('### Plotting session alignment procedure and statistics ###')
+
+
+        nC,nSes = self.results['assignments'].shape
+        sessions_bool = np.ones(nSes,'bool')
+        active = ~np.isnan(self.results['assignments'])
+
+        # s = s-1
+
+        dims = self.para['dims']
+        com_mean = np.nanmean(self.results['cm'],1)
+
+        W = sstats.norm.pdf(range(dims[0]),dims[0]/2,dims[0]/(0.5*1.96))
+        W /= W.sum()
+        W = np.sqrt(np.diag(W))
+        # x_w = np.dot(W,x)
+
+        y = np.hstack([np.ones((512,1)),np.arange(512).reshape(512,1)])
+        y_w = np.dot(W,y)
+        x = np.hstack([np.ones((512,1)),np.arange(512).reshape(512,1)])
+        x_w = np.dot(W,x)
+
+        # pathSession1 = pathcat([cluster.meta['pathMouse'],'Session%02d/results_redetect.mat'%1])
+        # ROIs1_ld = loadmat(pathSession1)
+        s_ = 0
+        ROIs1_ld = load_dict_from_hdf5(self.para['paths'][s_])
+        # Cn = np.array(ROIs1_ld['A'].sum(1).reshape(dims))
+        Cn = ROIs1_ld['Cn'].T
+        Cn -= Cn.min()
+        Cn /= Cn.max()
+        # if self.data[_s]['remap']['transposed']:
+          # Cn2 = Cn2.T
+        # dims = Cn.shape
+
+        # p_vals = np.zeros((cluster.meta['nSes'],4))*np.NaN
+        p_vals = np.zeros((nSes,2))*np.NaN
+        # fig1 = plt.figure(figsize=(7,5),dpi=pl_dat.sv_opt['dpi'])
+        fig = plt.figure(figsize=(7,5),dpi=150)
+        for s in tqdm(np.where(sessions_bool)[0][1:]):#cluster.meta['nSes'])):
+
+            # try:
+                # pathSession2 = pathcat([cluster.meta['pathMouse'],'Session%02d/results_redetect.mat'%(s+1)])
+                # ROIs2_ld = load_dict_from_hdf5(self.para['paths'][s])
+
+                # Cn2 = np.array(ROIs2_ld['A'].sum(1).reshape(dims))
+                # Cn2 = ROIs2_ld['Cn']
+                # Cn2 -= Cn2.min()
+                # Cn2 /= Cn2.max()
+                # if self.data[s]['remap']['transpose']:
+                #     Cn2 = Cn2.T
+                # print('adjust session position')
+
+                # t_start = time.time()
+                # (x_shift,y_shift), flow, corr = get_shift_and_flow(Cn,Cn2,dims,projection=None,plot_bool=False)
+                # (x_shift,y_shift) = cluster.sessions['shift'][s,:]
+                # flow = cluster.sessions['flow_field'][s,...]
+
+                # x_remap = (x_grid - x_shift + flow[...,0])
+                # y_remap = (y_grid - y_shift + flow[...,1])
+
+                # flow = self.data[s]['remap']['flow']
+                try:
+                  x_remap, y_remap = build_remap_from_shift_and_flow(self.para['dims'],self.data[s]['remap']['shift'],self.data[s]['remap']['flow'])
+
+                  flow_w_y = np.dot(self.data[s]['remap']['flow'][0,...],W)
+                  y0,res,rank,tmp = np.linalg.lstsq(y_w,flow_w_y)
+                  dy = -y0[0,:]/y0[1,:]
+                  idx_out = (dy>512) | (dy<0)
+                  r_y = sstats.linregress(np.where(~idx_out),dy[~idx_out])
+                  tilt_ax_y = r_y.intercept+r_y.slope*range(512)
+
+                  # print((res**2).sum())
+                  res_y = np.sqrt(((tilt_ax_y-dy)**2).sum())/dims[0]
+                  # print('y: %.3f'%(np.sqrt(((tilt_ax_y-dy)**2).sum())/dims[0]))
+
+                  flow_w_x = np.dot(self.data[s]['remap']['flow'][1,...],W)
+                  x0,res,rank,tmp = np.linalg.lstsq(x_w,flow_w_x)
+                  dx = -x0[0,:]/x0[1,:]
+                  idx_out = (dx>512) | (dx<0)
+                  r_x = sstats.linregress(np.where(~idx_out),dx[~idx_out])
+                  tilt_ax_x = r_x.intercept+r_x.slope*range(512)
+                  # print(r_x)
+                  # print('x:')
+                  # print((res**2).sum())
+                  # print('x: %.3f'%(np.sqrt(((tilt_ax_x-dx)**2).sum())/dims[0]))
+                  res_x = np.sqrt(((tilt_ax_x-dx)**2).sum())/dims[0]
+                  r = r_y if (res_y < res_x) else r_x
+                  d = dy if (res_y < res_x) else dx
+                  tilt_ax = r.intercept+r.slope*range(512)
+
+                  com_silent = com_mean[~active[:,s],:]
+                  com_active = com_mean[active[:,s],:]
+                  # com_PCs = com_mean[cluster.status[cluster.stats['cluster_bool'],s,2],:]
+
+                  dist_mean = np.abs((r.slope*com_mean[:,0]-com_mean[:,1]+r.intercept)/np.sqrt(r.slope**2+1**2))
+                  dist_silent = np.abs((r.slope*com_silent[:,0]-com_silent[:,1]+r.intercept)/np.sqrt(r.slope**2+1**2))
+                  dist_active = np.abs((r.slope*com_active[:,0]-com_active[:,1]+r.intercept)/np.sqrt(r.slope**2+1**2))
+                  # dist_PCs = np.abs((r.slope*com_PCs[:,0]-com_PCs[:,1]+r.intercept)/np.sqrt(r.slope**2+1**2))
+
+                  # dist = np.abs((r.slope*x_grid-y_grid+r.intercept)/np.sqrt(r.slope**2+1**2))
+
+                  # plt.figure()
+                  # ax_dist = plt.subplot(111)
+                  # im = ax_dist.imshow(dist,cmap='jet',origin='lower')
+                  # cb = plt.colorbar(im)
+                  # cb.set_label('distance [$\mu$m]',fontsize=10)
+                  # ax_dist.set_xlim([0,dims[0]])
+                  # ax_dist.set_ylim([0,dims[0]])
+                  # ax_dist.set_xlabel('x [$\mu$m]')
+                  # ax_dist.yaxis.tick_right()
+                  # ax_dist.yaxis.set_label_position("right")
+                  # ax_dist.set_ylabel('y [$\mu$m]')
+                  # plt.show(block=False)
+
+                  # plt.figure(fig1.number)
+                  # t_start = time.time()
+                  r_silent = sstats.ks_2samp(dist_silent,dist_mean)
+                  r_active = sstats.ks_2samp(dist_active,dist_mean)
+                  # r_cross = sstats.ks_2samp(dist_active,dist_silent)
+                  # r_PCs = sstats.ks_2samp(dist_PCs,dist_mean)
+                  # p_vals[s,:] = [r_silent.pvalue,r_active.pvalue,r_cross.pvalue,r_PCs.pvalue]
+                  # p_vals[s] = r_cross.pvalue
+                  p_vals[s,:] = [r_silent.statistic,r_active.statistic]
+                except:
+                   pass
+                # print('time (KS): %.3f'%(time.time()-t_start))
+                if s == s_compare:
+
+                    ROIs2_ld = load_dict_from_hdf5(self.para['paths'][s])
+
+                    # Cn2 = np.array(ROIs2_ld['A'].sum(1).reshape(dims))
+                    Cn2 = ROIs2_ld['Cn'].T
+                    Cn2 -= Cn2.min()
+                    Cn2 /= Cn2.max()
+                    # if self.data[s]['remap']['transposed']:
+                    #     Cn2 = Cn2.T
+                    
+
+                    props = dict(boxstyle='round', facecolor='w', alpha=0.8)
+
+                    ax_im1 = plt.axes([0.1,0.625,0.175,0.35])
+                    add_number(fig,ax_im1,order=1,offset=[-50,-5])
+                    im_col = np.zeros((512,512,3))
+                    im_col[:,:,0] = Cn2
+                    ax_im1.imshow(im_col,origin='lower')
+                    ax_im1.text(50,430,'Session %d'%(s+1),bbox=props,fontsize=8)
+                    ax_im1.set_xticks([])
+                    ax_im1.set_yticks([])
+
+                    im_col = np.zeros((512,512,3))
+                    im_col[:,:,1] = Cn
+
+                    ax_im2 = plt.axes([0.05,0.575,0.175,0.35])
+                    ax_im2.imshow(im_col,origin='lower')
+                    ax_im2.text(50,430,'Session %d'%1,bbox=props,fontsize=8)
+                    ax_im2.set_xticks([])
+                    ax_im2.set_yticks([])
+                    # ax_im2.set_xlabel('x [px]',fontsize=14)
+                    # ax_im2.set_ylabel('y [px]',fontsize=14)
+                    # sbar = ScaleBar(530.68/512 *10**(-6),location='lower right')
+                    # ax_im2.add_artist(sbar)
+
+                    ax_sShift = plt.axes([0.4,0.575,0.175,0.35])
+                    add_number(fig,ax_sShift,order=2)
+                    cbaxes = plt.axes([0.4, 0.88, 0.05, 0.02])
+
+                    C = signal.convolve(Cn-Cn.mean(),Cn2[::-1,::-1]-Cn2.mean(),mode='same')/(np.prod(dims)*Cn.std()*Cn2.std())
+                    C -= np.percentile(C,95)
+                    C /= C.max()
+                    im = ax_sShift.imshow(C,origin='lower',extent=[-dims[0]/2,dims[0]/2,-dims[1]/2,dims[1]/2],cmap='jet',clim=[0,1])
+                    
+                    cb = fig.colorbar(im,cax = cbaxes,orientation='horizontal')
+                    cbaxes.xaxis.set_label_position('top')
+                    cbaxes.xaxis.tick_top()
+                    cb.set_ticks([0,1])
+                    cb.set_ticklabels(['low','high'])
+                    cb.set_label('corr.',fontsize=10)
+                    ax_sShift.arrow(0,0,float(self.data[s]['remap']['shift'][0]),float(self.data[s]['remap']['shift'][1]),head_width=1.5,head_length=2,color='k',width=0.1,length_includes_head=True)
+                    ax_sShift.text(-13, -13, 'shift: (%d,%d)'%(self.data[s]['remap']['shift'][0],self.data[s]['remap']['shift'][1]), size=10, ha='left', va='bottom',color='k',bbox=props)
+
+                    #ax_sShift.colorbar()
+                    ax_sShift.set_xlim([-15,15])
+                    ax_sShift.set_ylim([-15,15])
+                    ax_sShift.set_xlabel('$\Delta x [\mu m]$')
+                    ax_sShift.set_ylabel('$\Delta y [\mu m]$')
+
+                    ax_sShift_all = plt.axes([0.54,0.79,0.1,0.15])
+                    for ss in range(1,nSes):
+                        if sessions_bool[ss]:
+                            col = [0.6,0.6,0.6]
+                        else:
+                            col = 'tab:red'
+                        ax_sShift_all.arrow(0,0,self.data[ss]['remap']['shift'][0],self.data[ss]['remap']['shift'][1],color=col,linewidth=0.5)
+                    ax_sShift_all.arrow(0,0,self.data[s]['remap']['shift'][0],self.data[s]['remap']['shift'][1],color='k',linewidth=0.5)
+                    ax_sShift_all.yaxis.set_label_position("right")
+                    ax_sShift_all.yaxis.tick_right()
+                    ax_sShift_all.xaxis.set_label_position("top")
+                    ax_sShift_all.xaxis.tick_top()
+                    ax_sShift_all.set_xlim([-25,50])
+
+
+    
+
+    
+                    ax_sShift_all.set_ylim([-25,50])
+                    # ax_sShift_all.set_xlabel('x [px]',fontsize=10)
+                    # ax_sShift_all.set_ylabel('y [px]',fontsize=10)
+
+                    idxes = 50
+                    # tx = dims[0]/2 - 1
+                    # ty = tilt_ax_y[int(tx)]
+                    ax_OptFlow = plt.axes([0.8,0.625,0.175,0.25])
+                    add_number(fig,ax_OptFlow,order=3)
+
+                    x_grid, y_grid = np.meshgrid(np.arange(0., dims[0]).astype(np.float32), np.arange(0., dims[1]).astype(np.float32))
+    
+                    ax_OptFlow.quiver(x_grid[::idxes,::idxes], y_grid[::idxes,::idxes], self.data[s]['remap']['flow'][0,::idxes,::idxes], self.data[s]['remap']['flow'][1,::idxes,::idxes], angles='xy', scale_units='xy', scale=0.1, headwidth=4,headlength=4, width=0.002, units='width')#,label='x-y-shifts')
+                    ax_OptFlow.plot(np.linspace(0,dims[0]-1,dims[0]),d,':',color='tab:green')
+                    # ax_OptFlow.plot(np.linspace(0,dims[0]-1,dims[0]),dx,'g:')
+                    # ax_OptFlow.plot(np.linspace(0,dims[0]-1,dims[0]),tilt_ax,'g-')
+                    ax_OptFlow.plot(np.linspace(0,dims[0]-1,dims[0]),tilt_ax,'-',color='tab:green')
+
+                    ax_OptFlow.set_xlim([0,dims[0]])
+                    ax_OptFlow.set_ylim([0,dims[1]])
+                    ax_OptFlow.set_xlabel('$x [\mu m]$')
+                    ax_OptFlow.set_ylabel('$y [\mu m]$')
+
+                    # ax_OptFlow_stats = plt.axes([0.65,0.6,0.075,0.125])
+                    # ax_OptFlow_stats.scatter(flow[:,:,0].reshape(-1,1),flow[:,:,1].reshape(-1,1),s=0.2,marker='.',color='k')#,label='xy-shifts')
+                    # ax_OptFlow_stats.plot(np.mean(flow[:,:,0]),np.mean(flow[:,:,1]),marker='.',color='r')
+                    # ax_OptFlow_stats.set_xlim(-10,10)
+                    # ax_OptFlow_stats.set_ylim(-10,10)
+                    # ax_OptFlow_stats.set_xlabel('$\Delta$x [px]',fontsize=10)
+                    # ax_OptFlow_stats.set_ylabel('$\Delta$y [px]',fontsize=10)
+                    # # ax_OptFlow_stats.yaxis.set_label_position("right")
+                    # # ax_OptFlow_stats.yaxis.tick_right()
+                    # #ax_OptFlow_stats.legend()
+
+
+                    # dist_mat = np.abs((r.slope*x_grid-y_grid+r.intercept)/np.sqrt(r.slope**2+1**2))
+                    # slope_normal = np.array([-r.slope,1])
+                    # slope_normal /= np.linalg.norm(slope_normal)
+                    # f_perp = np.dot(flow[:,:,:2],slope_normal)
+                    # # print(f_perp)
+                    # # print(flow[:,:,0]*slope_normal[0] + flow[:,:,1]*slope_normal[1])
+                    # h_dat = np.sign(f_perp)*np.sin(np.arccos((dist_mat - np.abs(f_perp))/dist_mat))*dist_mat
+
+                    # ax = plt.axes([0.575,0.125,0.175,0.35])
+                    # ax.yaxis.set_label_position("right")
+                    # ax.yaxis.tick_right()
+                    # im = ax.imshow(h_dat,origin='lower',cmap='jet',clim=[-30,30])
+                    # im = ax.imshow(f_perp,origin='lower',cmap='jet',clim=[-3,3])
+
+                    # cbaxes = plt.axes([0.548, 0.3, 0.01, 0.175])
+                    # cb = plt.colorbar(im,cax = cbaxes)
+                    # cbaxes.yaxis.set_label_position('left')
+                    # cbaxes.yaxis.set_ticks_position('left')
+                    # cb.set_label('z [$\mu$m]',fontsize=10)
+                    print('shift:',self.data[s]['remap']['shift'])
+                    x_remap,y_remap = build_remap_from_shift_and_flow(self.para['dims'],self.data[s]['remap']['shift'],self.data[s]['remap']['flow'])
+
+                    Cn2_corr = cv2.remap(Cn2.astype(np.float32), x_remap, y_remap, cv2.INTER_CUBIC)
+                    Cn2_corr -= Cn2_corr.min()
+                    Cn2_corr /= Cn2_corr.max()
+
+                    ax_sShifted = plt.axes([0.75,0.11,0.2,0.325])
+                    add_number(fig,ax_sShifted,order=6,offset=[-5,25])
+                    im_col = np.zeros((512,512,3))
+                    im_col[:,:,0] = Cn
+                    im_col[:,:,1] = Cn2_corr
+                    ax_sShifted.imshow(im_col,origin='lower')
+                    ax_sShifted.text(125,510,'aligned sessions',bbox=props,fontsize=10)
+                    ax_sShifted.set_xticks([])
+                    ax_sShifted.set_yticks([])
+
+                    ax_scatter = plt.axes([0.1,0.125,0.2,0.3])
+                    add_number(fig,ax_scatter,order=4)
+                    ax_scatter.scatter(com_silent[:,0],com_silent[:,1],s=0.7,c='k')
+                    ax_scatter.scatter(com_active[:,0],com_active[:,1],s=0.7,c='tab:orange')
+                    # x_ax = np.linspace(0,dims[0]-1,dims[0])
+                    # y_ax = n[0]/n[1]*(p[0]-x_ax) + p[1] + n[2]/n[1]*p[2]
+                    ax_scatter.plot(np.linspace(0,dims[0]-1,dims[0]),tilt_ax,'-',color='tab:green')
+                    # ax_scatter.plot(x_ax,y_ax,'k-')
+                    ax_scatter.set_xlim([0,dims[0]])
+                    ax_scatter.set_ylim([0,dims[0]])
+                    ax_scatter.set_xlabel('x [$\mu$m]')
+                    ax_scatter.set_ylabel('y [$\mu$m]')
+
+                    # x_grid, y_grid = np.meshgrid(np.arange(0., dims[0]).astype(np.float32),
+                                                   # np.arange(0., dims[1]).astype(np.float32))
+
+                    ax_hist = plt.axes([0.4,0.125,0.3,0.3])
+                    add_number(fig,ax_hist,order=5,offset=[-50,25])
+                    # ax_hist.hist(dist_mean,np.linspace(0,400,21),facecolor='k',alpha=0.5,density=True,label='all neurons')
+                    ax_hist.hist(dist_silent,np.linspace(0,400,51),facecolor='k',alpha=0.5,density=True,label='silent')
+                    ax_hist.hist(dist_active,np.linspace(0,400,51),facecolor='tab:orange',alpha=0.5,density=True,label='active')
+                    ax_hist.legend(loc='lower left',fontsize=8)
+                    ax_hist.set_ylabel('density')
+                    ax_hist.set_yticks([])
+                    ax_hist.set_xlabel('distance from axis [$\mu$m]')
+                    ax_hist.set_xlim([0,400])
+                    ax_hist.spines[['top','right']].set_visible(False)
+            # except:
+                # pass
+
+        ax_p = plt.axes([0.525,0.325,0.125,0.125])
+        ax_p.axhline(0.01,color='k',linestyle='--')
+        ax_p.plot(np.where(sessions_bool)[0],p_vals[sessions_bool,0],'k',linewidth=0.5)
+        ax_p.plot(np.where(sessions_bool)[0],p_vals[sessions_bool,1],'tab:orange',linewidth=0.5)
+        # ax_p.plot(np.where(sessions_bool)[0],p_vals[sessions_bool],'b')
+        #ax_p.plot(np.where(sessions_bool)[0],p_vals[sessions_bool,2],'--',color=[0.6,0.6,0.6])
+        #ax_p.plot(np.where(sessions_bool)[0],p_vals[sessions_bool,3],'g--')
+        ax_p.set_yscale('log')
+        ax_p.xaxis.set_label_position("top")
+        ax_p.yaxis.set_label_position("right")
+        ax_p.tick_params(axis='y',which='both',left=False,right=True,labelright=True,labelleft=False)
+        ax_p.tick_params(axis='x',which='both',top=True,bottom=False,labeltop=True,labelbottom=False)
+        # ax_p.xaxis.tick_top()
+        # ax_p.yaxis.tick_right()
+        ax_p.set_xlabel('session')
+        ax_p.set_ylim([10**(-4),1])
+        # ax_p.set_ylim([1,0])
+        ax_p.set_ylabel('p-value',fontsize=8,rotation='horizontal',labelpad=-5,y=-0.2)
+        ax_p.spines[['bottom','left']].set_visible(False)
+        # ax_p.tick_params(axis='x',which='both',top=True,bottom=False,labeltop=True,labelbottom=False)
+
+        plt.tight_layout()
+        plt.show(block=False)
+        # if sv:
+        #     pl_dat.save_fig('session_align')
+
+    
+    def plot_clusters(self):
+
+        nC,nSes = self.results['assignments'].shape
+        sessions_bool = np.ones(nSes,'bool')
+        active = ~np.isnan(self.results['assignments'])
+
+        t_ses = np.arange(nSes)
+
+        plt.figure(figsize=(4,2))
+        ax1 = plt.subplot(111)
+        #plt.figure(figsize=(4,3))
+        #ax1 = plt.axes([0.15, 0.5, 0.8, 0.45])
+        #ax2 = plt.axes([0.15, 0.2, 0.8, 0.25])
+
+
+        #active_time = np.zeros(nSes)
+        #for s in range(nSes):
+          #if sessions_bool[s]:
+            #pathSession = pathcat([cluster.meta['pathMouse'],'Session%02d'%(s+1)]);
+
+            #for file in os.listdir(pathSession):
+              #if file.endswith("aligned.mat"):
+                #pathBH = os.path.join(pathSession, file)
+
+            #f = h5py.File(pathBH,'r')
+            #key_array = ['longrunperiod']
+
+            #dataBH = {}
+            #for key in key_array:
+              #dataBH[key] = np.squeeze(f.get('alignedData/resampled/%s'%key).value)
+            #f.close()
+
+            #active_time[s] = dataBH['longrunperiod'].sum()/len(dataBH['longrunperiod']);
+
+        #ax2.plot(t_ses[sessions_bool],active_time[sessions_bool],color='k')
+        ##ax2.plot(t_measures(1:s_end),active_time,'k')
+        #ax2.set_xlim([0,t_ses[-1]])
+        #ax2.set_ylim([0,1])
+        #ax2.set_xlabel('t [h]',fontsize=14)
+        #ax2.set_ylabel('active time',fontsize=14)
+
+        #ax1.plot(t_ses[sessions_bool],np.ones(sessions_bool.sum())*nC,color='k',linestyle=':',label='# neurons')
+        ax1.scatter(t_ses[sessions_bool],active[:,sessions_bool].sum(0), s=20,color='k',marker='o',facecolor='none',label='# active neurons')
+        ax1.set_ylim([0,1000])#nC*1.2])
+        ax1.set_xlim([0,t_ses[-1]])
+        ax1.legend(loc='upper right')
+
+        # ax1.scatter(t_ses[sessions_bool],cluster.status[:,sessions_bool,2].sum(0),s=20,color='k',marker='o',facecolors='k',label='# place cells')
+
+        ax2 = ax1.twinx()
+        # ax2.plot(t_ses[sessions_bool],cluster.status[:,sessions_bool,2].sum(0)/active[:,sessions_bool,1].sum(0),'r')
+        ax2.set_ylim([0,0.7])
+        ax2.yaxis.label.set_color('red')
+        ax2.tick_params(axis='y',colors='red')
+        ax2.set_ylabel('fraction PCs')
+
+        ax1.set_xlim([0,t_ses[-1]])
+        ax1.set_xlabel('session s',fontsize=14)
+        ax1.legend(loc='upper right')
+        plt.tight_layout()
+        plt.show(block=False)
+
+        #print(cluster.status[:,sessions_bool,2].sum(0)/cluster.status[:,sessions_bool,1].sum(0))
+        # if sv:
+        #     pl_dat.save_fig('neuron_numbers')
 
     def calculate_RoC(self,steps):
       key_counts = 'counts' if self.para['model']=='shifted' else 'counts_unshifted'
@@ -2185,15 +3012,6 @@ def norm_nrg(a_):
   a[indx] = cumEn
   return a.reshape(dims, order='F')
 
-
-def add_number(fig,ax,order=1,offset=None):
-
-    # offset = [-175,50] if offset is None else offset
-    offset = [-75,25] if offset is None else offset
-    pos = fig.transFigure.transform(plt.get(ax,'position'))
-    x = pos[0,0]+offset[0]
-    y = pos[1,1]+offset[1]
-    ax.text(x=x,y=y,s='%s)'%chr(96+order),ha='center',va='center',transform=None,weight='bold',fontsize=14)
 
 def scale_down_counts(counts,times=1):
 

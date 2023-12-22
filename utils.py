@@ -205,24 +205,45 @@ def get_shift_and_flow(A1,A2,dims=(512,512),projection=-1,transpose_it=False,plo
 
   c,(y_shift,x_shift) = calculate_img_correlation(A1,A2,plot_bool=plot_bool)
 
-  x_grid, y_grid = np.meshgrid(np.arange(0., dims[0]).astype(np.float32), np.arange(0., dims[1]).astype(np.float32))
-  x_remap = (x_grid - x_shift).astype(np.float32)
-  y_remap = (y_grid - y_shift).astype(np.float32)
+  x_remap,y_remap = build_remap_from_shift_and_flow(dims,(x_shift,y_shift))
 
   A2 = cv2.remap(A2, x_remap, y_remap, interpolation=cv2.INTER_CUBIC)
   A2 = normalize_array(A2,'uint',8)
 
   flow = cv2.calcOpticalFlowFarneback(A1,A2,None,0.5,5,128,3,7,1.5,0)
 
-  if plot_bool:
+  return (x_shift,y_shift), flow, c
 
-    print('shift:',[x_shift,y_shift])
-    idxes = 15
+
+def build_remap_from_shift_and_flow(dims,shifts,flow=None):
+
+    '''
+        returns remap arrays in 2D
+
+        dims (2,) with (dim_x,dim_y)
+        shifts (2,) with (x,y)
+        flow (dim1,dim2,d) with d=dimension
+    '''
+    
+    x_grid, y_grid = np.meshgrid(np.arange(0., dims[0]).astype(np.float32), np.arange(0., dims[1]).astype(np.float32))
+    
+    if not (flow is None):
+        x_remap = (x_grid - shifts[0] + flow[0,:,:]).astype(np.float32)
+        y_remap = (y_grid - shifts[1] + flow[1,:,:]).astype(np.float32)
+    else:
+        x_remap = (x_grid - shifts[0]).astype(np.float32)
+        y_remap = (y_grid - shifts[1]).astype(np.float32)
+       
+    return x_remap, y_remap
+
+
+def plot_flow(flow,dims,idxes=15):
+    x_grid, y_grid = np.meshgrid(np.arange(0., dims[0]).astype(np.float32), np.arange(0., dims[1]).astype(np.float32))
+
+    # print('shift:',[x_shift,y_shift])
     plt.figure()
     plt.quiver(x_grid[::idxes,::idxes], y_grid[::idxes,::idxes], flow[::idxes,::idxes,0], flow[::idxes,::idxes,1], angles='xy', scale_units='xy', scale=1, headwidth=4,headlength=4, width=0.002, units='width')
     plt.show(block=False)
-
-  return (x_shift,y_shift), flow, (x_grid,y_grid), c
 
 
 def normalize_array(A,a_type='uint',a_bits=8,axis=None):
