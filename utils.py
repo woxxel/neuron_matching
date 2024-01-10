@@ -11,8 +11,6 @@
   fun_wrapper
         - wrapper to pass array values as separate arguments to a function
         [should be possible via spread-operator - test that!]
-
-
 '''
 
 import pickle, cv2
