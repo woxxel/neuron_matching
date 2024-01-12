@@ -297,9 +297,9 @@ class matching:
         while True:
           self.A = self.load_footprints(self.paths['sessions'][s],s)
           if isinstance(self.A,bool):
+             s += 1
              continue
           else:
-             s += 1
              break
         self.progress = tqdm.tqdm(zip(range(s+1,self.nS),self.paths['sessions'][s+1:]),total=self.nS,leave=True)
         
@@ -310,7 +310,7 @@ class matching:
         
         ## initialize reference session, containing the union of all neurons
         self.data['joint'] = copy.deepcopy(self.data_blueprint)
-        self.data['joint']['nA'][s] = self.A_ref.shape[1]
+        self.data['joint']['nA'][0] = self.A_ref.shape[1]
         self.data['joint']['idx_eval'] = np.ones(self.data['joint']['nA'][0],'bool')
         self.data['joint']['cm'] = center_of_mass(self.A_ref,self.params['dims'][0],self.params['dims'][1],convert=self.params['pxtomu'])
 
@@ -319,14 +319,14 @@ class matching:
           'assignments': np.zeros((self.data[s]['nA'][1],self.nS))*np.NaN,
           'p_matched': np.zeros((self.data[s]['nA'][1],self.nS))*np.NaN
         }
-        self.results['assignments'][:,0] = np.where(self.data[0]['idx_eval'])[0]
+        self.results['assignments'][:,s] = np.where(self.data[s]['idx_eval'])[0]
         # self.results['p_matched'][:,0] = np.NaN
 
         for (s,self.currentPath) in self.progress:
             self.A = self.load_footprints(self.currentPath,s)
 
             if isinstance(self.A,bool): continue
-            
+            print('processing',s,self.currentPath)
             if not (self.A is None):
                 
                 self.progress.set_description('A union size: %d, Preparing footprints from Session #%d'%(self.data['joint']['nA'][0],s))
