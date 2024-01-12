@@ -35,14 +35,11 @@ from matplotlib.cm import get_cmap
 from matplotlib.widgets import Slider
 
 from .utils import pickleData, center_of_mass, calculate_img_correlation, get_shift_and_flow, build_remap_from_shift_and_flow, fun_wrapper, load_dict_from_hdf5, normalize_sparse_array
-from .utils_plot import plot_with_confidence, add_number
+from .utils import plot_with_confidence, add_number
 from .parameters import matchingParams
 from .fit_functions import functions
 
 logging.basicConfig(level=logging.INFO)
-
-## create paths that should be processed
-
 
 class matching:
 
@@ -50,7 +47,9 @@ class matching:
         
         
         if not paths or not mousePath:
-            mousePath = 'data/555wt'; 
+            mousePath = 'data/555wt'
+
+            ## create paths that should be processed
             paths = [os.path.join(mousePath,sessionPath,'OnACID_results.hdf5') for sessionPath in os.listdir(mousePath) if 'Session' in sessionPath]
             paths.sort()
 
@@ -236,13 +235,14 @@ class matching:
             self.data[s]['filePath'] = self.currentPath
 
             self.A = self.load_footprints(self.currentPath,s,store_data=True)
-            
+            if isinstance(self.A,bool): continue
+
             if not (self.A is None):
                 
                 self.progress.set_description('Aligning data from %s'%self.currentPath)
                 
                 ## prepare (and align) footprints
-                prepared,out_para = self.prepare_footprints(align_to_reference=s>0)
+                prepared,out_para = self.prepare_footprints(align_to_reference=s>0 and hasattr(self,'A_ref'))
                 if not prepared: 
                     print('skipping %s (image correlation %.2d too low)'%(self.currentPath,out_para))
                     continue
@@ -265,7 +265,7 @@ class matching:
 
                 self.update_joint_model(s,s)
 
-                if s>0:
+                if s>0 and hasattr(self,'A_ref'):
                     self.progress.set_description('Calculate cross-statistics for %s'%self.currentPath)
                     self.data_cross['D_ROIs'],self.data_cross['fp_corr'] = self.calculate_statistics(s,s_ref,self.A_ref)       # calculating distances and footprint correlations
                     self.progress.set_description('Update model with data from %s'%self.currentPath)
@@ -291,25 +291,33 @@ class matching:
         self.params['model'] = model
         
         self.nS = len(self.paths['sessions'])
-        self.progress = tqdm.tqdm(zip(range(1,self.nS),self.paths['sessions'][1:]),total=self.nS,leave=True)
 
         ## load and prepare first set of footprints
-        self.A = self.load_footprints(self.paths['sessions'][0],0)
+        s=0
+        while True:
+          self.A = self.load_footprints(self.paths['sessions'][s],s)
+          if isinstance(self.A,bool):
+             continue
+          else:
+             s += 1
+             break
+        self.progress = tqdm.tqdm(zip(range(s+1,self.nS),self.paths['sessions'][s+1:]),total=self.nS,leave=True)
+        
         self.prepare_footprints(align_to_reference=False)
         self.Cn_ref = self.data_tmp['Cn']
-        self.A_ref = self.A[:,self.data[0]['idx_eval']]
+        self.A_ref = self.A[:,self.data[s]['idx_eval']]
         self.A0 = self.A.copy()   ## store initial footprints for common reference
         
         ## initialize reference session, containing the union of all neurons
         self.data['joint'] = copy.deepcopy(self.data_blueprint)
-        self.data['joint']['nA'][0] = self.A_ref.shape[1]
+        self.data['joint']['nA'][s] = self.A_ref.shape[1]
         self.data['joint']['idx_eval'] = np.ones(self.data['joint']['nA'][0],'bool')
         self.data['joint']['cm'] = center_of_mass(self.A_ref,self.params['dims'][0],self.params['dims'][1],convert=self.params['pxtomu'])
 
         ## prepare and initialize assignment- and p_matched-arrays for storing results
         self.results = {
-          'assignments': np.zeros((self.data[0]['nA'][1],self.nS))*np.NaN,
-          'p_matched': np.zeros((self.data[0]['nA'][1],self.nS))*np.NaN
+          'assignments': np.zeros((self.data[s]['nA'][1],self.nS))*np.NaN,
+          'p_matched': np.zeros((self.data[s]['nA'][1],self.nS))*np.NaN
         }
         self.results['assignments'][:,0] = np.where(self.data[0]['idx_eval'])[0]
         # self.results['p_matched'][:,0] = np.NaN
@@ -317,6 +325,8 @@ class matching:
         for (s,self.currentPath) in self.progress:
             self.A = self.load_footprints(self.currentPath,s)
 
+            if isinstance(self.A,bool): continue
+            
             if not (self.A is None):
                 
                 self.progress.set_description('A union size: %d, Preparing footprints from Session #%d'%(self.data['joint']['nA'][0],s))
