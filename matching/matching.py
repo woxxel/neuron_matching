@@ -412,8 +412,10 @@ class matching:
           idx_n = self.results['assignments'][idx_c,s].astype('int')
 
           for key in ['cm','SNR_comp','r_values','cnn_preds']:
-            self.results[key][idx_c,s,...] = self.data[s][key][idx_n,...]
-
+            try:
+              self.results[key][idx_c,s,...] = self.data[s][key][idx_n,...]
+            except:
+              pass
         # finally, save results
         if save_results:  
             self.save_registration(suffix=save_suffix)
