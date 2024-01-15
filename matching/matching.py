@@ -297,9 +297,11 @@ class matching:
         while True:
           self.A = self.load_footprints(self.paths['sessions'][s],s)
           if isinstance(self.A,bool):
+             self.data[s]['skipped'] = True
              s += 1
              continue
           else:
+             self.data[s]['skipped'] = False
              break
         self.progress = tqdm.tqdm(zip(range(s+1,self.nS),self.paths['sessions'][s+1:]),total=self.nS,leave=True)
         
@@ -325,9 +327,13 @@ class matching:
         for (s,self.currentPath) in self.progress:
             self.A = self.load_footprints(self.currentPath,s)
 
-            if isinstance(self.A,bool): continue
+            if isinstance(self.A,bool): 
+               self.data[s]['skipped'] = True
+               continue
+            
             print('processing',s,self.currentPath)
             if not (self.A is None):
+                self.data[s]['skipped'] = False
                 
                 self.progress.set_description('A union size: %d, Preparing footprints from Session #%d'%(self.data['joint']['nA'][0],s))
 
@@ -398,7 +404,10 @@ class matching:
         for key in ['SNR_comp','r_values','cnn_preds']:
            self.results[key] = np.zeros_like(self.results['assignments'])
         
-        for s in range(self.nS):
+        # for s in range(self.nS):
+        for s in self.data:
+          if s=='joint' or self.data[s]['skipped']: continue
+          
           idx_c = np.where(~np.isnan(self.results['assignments'][:,s]))[0]
           idx_n = self.results['assignments'][idx_c,s].astype('int')
 

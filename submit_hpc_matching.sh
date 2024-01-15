@@ -8,11 +8,11 @@ dataset="AlzheimerMice_Hayashi"
 SUBMIT_FILE="./sbatch_submit.sh"
 
 mice=$(find $datapath/$dataset/* -maxdepth 0 -type d -exec basename {} \;)
-echo "Found mice in dataset $dataset: $mice"
-read -p 'Which mouse should be processed? ' mouse
+# echo "Found mice in dataset $dataset: $mice"
+# read -p 'Which mouse should be processed? ' mouse
 
-# for mouse in $mice
-# do
+for mouse in $mice
+do
 
   if test -f $datapath/$dataset/$mouse/matching/neuron_registration_.pkl; then
     echo "$session_name already processed - skipping"
@@ -44,4 +44,4 @@ EOF
   sbatch $SUBMIT_FILE
   rm $SUBMIT_FILE
 
-# done
+done
