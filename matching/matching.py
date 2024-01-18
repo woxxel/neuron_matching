@@ -43,12 +43,19 @@ logging.basicConfig(level=logging.INFO)
 
 class matching:
 
-    def __init__(self,paths=None,mousePath=None,logLevel=logging.ERROR):
+    def __init__(self,mousePath=None,paths=None,logLevel=logging.ERROR):
         
-        
-        if not paths or not mousePath:
+        '''
+            TODO:
+                * put match results into more handy shape:
+                    - list of filePaths
+                    - SNR, etc not twice (only in results)
+                    - remap in results, not data (shift=0,corr=1)
+                    - p_same containing best and best_without_match value and being in results
+        '''
+        if not mousePath:
             mousePath = 'data/555wt'
-
+        if not paths:
             ## create paths that should be processed
             paths = [os.path.join(mousePath,sessionPath,'OnACID_results.hdf5') for sessionPath in os.listdir(mousePath) if 'Session' in sessionPath]
             paths.sort()
@@ -1055,6 +1062,9 @@ class matching:
           #self.results['assignments'] = self.results['assignment']
         #except:
           #1
+
+
+
 
 
 
