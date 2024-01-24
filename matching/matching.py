@@ -29,19 +29,19 @@ from scipy.io import loadmat
 from scipy.optimize import curve_fit, linear_sum_assignment
 import scipy.stats as sstats
 
-from matplotlib import pyplot as plt, rc, colors as mcolors, cm
+from matplotlib import pyplot as plt, rc, colors as mcolors, patches as mppatches, lines as mplines
 # from matplotlib.cm import get_cmap
 
-from plotly import graph_objects as go, express as px
-from plotly.subplots import make_subplots
+# from plotly import graph_objects as go, express as px
+# from plotly.subplots import make_subplots
 
-import dash
-from dash import dcc,html
-from dash.dependencies import Input, Output
+# import dash
+# from dash import dcc,html
+# from dash.dependencies import Input, Output
 
 from matplotlib.widgets import Slider
 
-from .utils import pickleData, center_of_mass, calculate_img_correlation, get_shift_and_flow, build_remap_from_shift_and_flow, fun_wrapper, load_dict_from_hdf5, normalize_sparse_array
+from .utils import pickleData, load_field_from_hdf5, center_of_mass, calculate_img_correlation, get_shift_and_flow, build_remap_from_shift_and_flow, fun_wrapper, load_dict_from_hdf5, normalize_sparse_array
 from .utils import plot_with_confidence, add_number
 from .parameters import matchingParams
 from .fit_functions import functions
@@ -482,7 +482,7 @@ class matching:
             
             ext = os.path.splitext(loadPath)[-1]  # obtain extension
             if ext=='.hdf5':
-                ld = load_dict_from_hdf5(loadPath)    # function from CaImAn
+                ld = load_field_from_hdf5(loadPath,'A')    # function from CaImAn
             elif ext=='.mat':
                 ld = loadmat(loadPath,squeeze_me=True)
             else:
@@ -1896,89 +1896,97 @@ class matching:
       print('smoothing by gaussian')
     
 
-    def plot_matches(self, s_ref, s, p_thr=0.5):
+    def plot_matches(self, s_ref, s, p_thr=0.5,
+        color_s_ref='coral',
+        color_s='lightgreen'):
     
-      '''
+        '''
 
-        TODO:
-          * rewrite function, such that it calculates and plots footprint matching for 2 arbitrary sessions (s,s_ref)
-          * write function description and document code properly
-          * optimize plotting, so it doesn't take forever
-      '''
-      
+            TODO:
+            * rewrite function, such that it calculates and plots footprint matching for 2 arbitrary sessions (s,s_ref)
+            * write function description and document code properly
+            * optimize plotting, so it doesn't take forever
+        '''
+        
+        matched1 = self.results['assignments']
+        matched_c = np.all(np.isfinite(self.results['assignments'][:,(s_ref,s)]),axis=1)
+        matched1 = self.results['assignments'][matched_c,s_ref].astype(int)
+        matched2 = self.results['assignments'][matched_c,s].astype(int)
+        # print('matched: ',matched_c.sum())
+        nMatched = matched_c.sum()
+        
+        non_matched_c = np.isfinite(self.results['assignments'][:,s_ref]) & np.isnan(self.results['assignments'][:,s])
+        non_matched1 = self.results['assignments'][non_matched_c,s_ref].astype(int)
+        # print('non_matched 1: ',non_matched_c.sum())
+        nNonMatched1 = non_matched_c.sum()
+        
+        non_matched_c = np.isnan(self.results['assignments'][:,s_ref]) & np.isfinite(self.results['assignments'][:,s])
+        non_matched2 = self.results['assignments'][non_matched_c,s].astype(int)
+        # print('non_matched 1: ',non_matched_c.sum())
+        nNonMatched2 = non_matched_c.sum()
 
-      matches = linear_sum_assignment(1 - self.data[s]['p_same'].toarray())
-      p_matched = self.data[s]['p_same'].toarray()[matches]
+        
+        print('plotting...')
+        t_start = time.time()
 
-      # if plot_results:
-      idx_TP = np.where(np.array(p_matched) > p_thr)[0] ## thresholding results
-      nA_ref = self.data[s]['p_same'].shape[0]
-      if len(idx_TP) > 0:
-          matched_ROIs1 = matches[0][idx_TP]    # ground truth
-          matched_ROIs2 = matches[1][idx_TP]   # algorithm - comp
-          non_matched1 = np.setdiff1d(list(range(nA_ref)), matches[0][idx_TP])
-          non_matched2 = np.setdiff1d(list(range(self.data[s]['nA'][0])), matches[1][idx_TP])
-          TP = np.sum(np.array(p_matched) > p_thr).astype('float32')
-      else:
-          TP = 0.
-          plot_results = False
-          matched_ROIs1 = []
-          matched_ROIs2 = []
-          non_matched1 = list(range(nA_ref))
-          non_matched2 = list(range(self.data[s]['nA'][0]))
+        def load_and_align(s):
+           
+            ld = load_dict_from_hdf5(self.paths['sessions'][s])
+            A = ld['A']
+        
+            x_remap,y_remap = build_remap_from_shift_and_flow(self.params['dims'],self.data[s]['remap']['shift'],self.data[s]['remap']['flow'])
+        
+            Cn = cv2.remap(
+                ld['Cn'].T,   # reshape image to original dimensions
+                x_remap, y_remap,                 # apply reverse identified shift and flow
+                cv2.INTER_CUBIC                 
+            )
 
-          FN = nA_ref - TP
-          FP = self.data[s]['nA'][0] - TP
-          TN = 0
+            lp, hp = np.nanpercentile(Cn, [25, 99])
+            Cn -= lp
+            Cn /= (hp-lp)
 
-          performance = dict()
-          performance['recall'] = TP / (TP + FN)
-          performance['precision'] = TP / (TP + FP)
-          performance['accuracy'] = (TP + TN) / (TP + FP + FN + TN)
-          performance['f1_score'] = 2 * TP / (2 * TP + FP + FN)
+            Cn = np.clip(Cn,a_min=0,a_max=1)
 
-      print('plotting...')
-      t_start = time.time()
-      cmap = 'viridis'
+            A = sp.sparse.hstack([
+                sp.sparse.csc_matrix(                    # cast results to sparse type
+                    cv2.remap(
+                        fp.reshape(self.params['dims']),   # reshape image to original dimensions
+                        x_remap, y_remap,                 # apply reverse identified shift and flow
+                        cv2.INTER_CUBIC                 
+                    ).reshape(-1,1)                       # reshape back to allow sparse storage
+                    ) for fp in A.toarray().T        # loop through all footprints
+                ])
+            return A,Cn
 
-      self.A_ref = self.load_footprints(self.paths['sessions'][s_ref],s_ref)
-      # Cn = self.A_ref.sum(1).reshape(512,512)
-      Cn = self.data_tmp['Cn']
-      self.A = self.load_footprints(self.paths['sessions'][s],s)
+        Cn = np.zeros(self.params['dims']+(3,))
+        
+        A_ref, Cn[...,0] = load_and_align(s_ref)
+        A, Cn[...,1] = load_and_align(s)
+        
+        level = [0.02]
+        plt.figure(figsize=(15,12))
 
+        ax_matches = plt.subplot(111)
+        ax_matches.imshow(Cn, origin='lower')
 
-      level = 0.1
-      plt.figure(figsize=(15,12))
-      plt.rcParams['pdf.fonttype'] = 42
-      font = {'family': 'Myriad Pro',
-            'weight': 'regular',
-            'size': 10}
-      plt.rc('font', **font)
-      lp, hp = np.nanpercentile(np.array(Cn), [5, 95])
+        [ax_matches.contour(np.reshape(a.todense(),self.params['dims']), levels=level, colors=color_s_ref, linewidths=2) for a in A_ref[:,matched1].T]
+        [ax_matches.contour(np.reshape(a.todense(),self.params['dims']), levels=level, colors=color_s_ref, linewidths=2, linestyles='--') for a in A_ref[:,non_matched1].T]
 
-      ax_matches = plt.subplot(121)
-      ax_nonmatches = plt.subplot(122)
+        print('first half done: %5.3f'%(time.time()-t_start))
+        [ax_matches.contour(np.reshape(a.todense(),self.params['dims']), levels=level, colors=color_s, linewidths=2) for a in A[:,matched2].T]
+        [ax_matches.contour(np.reshape(a.todense(),self.params['dims']), levels=level, colors=color_s, linewidths=2, linestyles='--') for a in A[:,non_matched2].T]
 
-      ax_matches.imshow(Cn, vmin=lp, vmax=hp, cmap=cmap)
-      ax_nonmatches.imshow(Cn, vmin=lp, vmax=hp, cmap=cmap)
+        ax_matches.legend(handles=[
+           mppatches.Patch(color=color_s_ref,label='reference session'),
+           mppatches.Patch(color=color_s,label='session'),
+           mplines.Line2D([0],[0],color='k',linestyle='-',label=f'matched ({nMatched})'),
+           mplines.Line2D([0],[0],color='k',linestyle='--',label=f'non-matched ({nNonMatched1}/{nNonMatched2})'),
+        ],loc='lower left', framealpha=0.9)
+        plt.setp(ax_matches,xlabel='x [px]',ylabel='y [px]')
+        print('done. time taken: %5.3f'%(time.time()-t_start))
+        plt.show(block=False)
 
-      A = np.reshape(self.A_ref.astype('float32').toarray(), self.params['dims'] + (-1,), order='F').transpose(2, 0, 1)
-      [ax_matches.contour(a, levels=[level], colors='w', linewidths=1) for a in A[matched_ROIs1,...]]
-      [ax_nonmatches.contour(a, levels=[level], colors='w', linewidths=1) for a in A[non_matched1,...]]
-
-      print('first half done - %5.3f'%(time.time()-t_start))
-      A = None
-      A = np.reshape(self.A.astype('float32').toarray(), self.params['dims'] + (-1,), order='F').transpose(2, 0, 1)
-
-      [ax_matches.contour(a, levels=[level], colors='r', linewidths=1) for a in A[matched_ROIs2,...]]
-      [ax_nonmatches.contour(a, levels=[level], colors='r', linewidths=1) for a in A[non_matched2,...]]
-      A = None
-
-      plt.draw()
-      print('done. time taken: %5.3f'%(time.time()-t_start))
-      plt.show(block=False)
-
-      return matches, p_matched
 
 
     def plot_neuron_numbers(self):

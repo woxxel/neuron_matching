@@ -13,7 +13,7 @@
         [should be possible via spread-operator - test that!]
 '''
 
-import pickle, cv2
+import pickle, cv2, os
 import scipy as sp
 from scipy import signal
 import numpy as np
@@ -38,6 +38,26 @@ def pickleData(dat,path,mode='load',prnt=True):
     if prnt:
         print('Data loaded from %s'%path)
     return dat
+
+
+def load_field_from_hdf5(filePath,field):
+
+    '''
+        currently only works for A
+    '''
+
+    file = h5py.File(filePath,'r')
+    # only load a single variable: A
+
+    path = '/'
+    data =  file[os.path.join(path,field,'data')][...]
+    indices = file[os.path.join(path,field,'indices')][...]
+    indptr = file[os.path.join(path,field,'indptr')][...]
+    shape = file[os.path.join(path,field,'shape')][...]
+    
+    val = sp.sparse.csc_matrix((data[:], indices[:],
+        indptr[:]), shape[:])
+    return val
 
 
 def center_of_mass(A, d1, d2, d3=None,d1_offset=0,d2_offset=0,d3_offset=0,convert=1.):
