@@ -20,7 +20,7 @@
 '''
 
 
-import os, cv2, copy, time, logging, pickle, tqdm
+import os, cv2, copy, time, logging, pickle, tqdm, h5py
 import numpy as np
 
 import scipy as sp
@@ -29,8 +29,15 @@ from scipy.io import loadmat
 from scipy.optimize import curve_fit, linear_sum_assignment
 import scipy.stats as sstats
 
-from matplotlib import pyplot as plt, rc, colors as mcolors
-from matplotlib.cm import get_cmap
+from matplotlib import pyplot as plt, rc, colors as mcolors, cm
+# from matplotlib.cm import get_cmap
+
+from plotly import graph_objects as go, express as px
+from plotly.subplots import make_subplots
+
+import dash
+from dash import dcc,html
+from dash.dependencies import Input, Output
 
 from matplotlib.widgets import Slider
 
@@ -2162,7 +2169,7 @@ class matching:
         
         n_arr = np.random.choice(np.where(active.sum(1)>10)[0],nDisp)
         # n_arr = np.random.randint(0,cluster.meta['nC'],nDisp)
-        cmap = get_cmap('tab20')
+        cmap = cm.get_cmap('tab20')
         ax_3D.set_prop_cycle(color=cmap.colors)
         # print(self.results['cm'][n_arr,:,0],self.results['cm'][n_arr,:,0].shape)
         for n in n_arr:
@@ -2858,6 +2865,65 @@ class matching:
         # if sv:
         #     pl_dat.save_fig('session_align')
 
+      
+    def plot_footprints(self,c,use_plotly=False):
+        '''
+            plots footprints of neuron c across all sessions in 3D view
+        '''
+        
+        X = np.arange(0, self.params['dims'][0])
+        Y = np.arange(0, self.params['dims'][1])
+        X, Y = np.meshgrid(X, Y)
+
+        use_opt_flow=True
+
+        fig, ax = plt.subplots(ncols=1,subplot_kw={"projection": "3d"})
+
+        def plot_fp(fig,c):
+            
+            for s,path in enumerate(self.paths['sessions']):
+                if s > 20: break
+                idx = self.results['assignments'][c,s]
+                # print('footprint:',s,idx)
+                if np.isfinite(idx):
+                    file = h5py.File(path,'r')
+                    # only load a single variable: A
+
+                    data =  file['/A/data'][...]
+                    indices = file['/A/indices'][...]
+                    indptr = file['/A/indptr'][...]
+                    shape = file['/A/shape'][...]
+                    A = sp.sparse.csc_matrix((data[:], indices[:],
+                        indptr[:]), shape[:])
+
+                    A = A[:,int(idx)].reshape(self.params['dims']).todense()
+
+                    if s>0:
+                        ## use shift and flow to align footprints - apply reverse mapping
+                        x_remap,y_remap = build_remap_from_shift_and_flow(self.params['dims'],self.data[s]['remap']['shift'],self.data[s]['remap']['flow'] if use_opt_flow else None)
+                        A2 = cv2.remap(A,
+                            x_remap, y_remap, # apply reverse identified shift and flow
+                            cv2.INTER_CUBIC                 
+                        )
+                    else:
+                        A2 = A
+                    
+                    A2 /= A2.max()
+                    A2[A2<0.1*A2.max()] = np.NaN
+
+                    # mask = A2>0.1*A2.max()
+                    ax.plot_surface(X, Y, A2+s, linewidth=0, antialiased=False,rstride=5,cstride=5)
+                    # ax.plot_trisurf(X[mask], Y[mask], A2[mask]+s)
+        plot_fp(fig,c)
+        margin = 40
+        com = np.nanmean(self.results['cm'][c,:],axis=0) / self.params['pxtomu']
+        plt.setp(ax,
+                xlim=[com[0]-margin,com[0]+margin],
+                ylim=[com[1]-margin,com[1]+margin],
+            )
+        plt.show(block=False)       
+
+
     
     def plot_clusters(self):
 
@@ -2918,6 +2984,7 @@ class matching:
         ax1.set_xlim([0,t_ses[-1]])
         ax1.set_xlabel('session s',fontsize=14)
         ax1.legend(loc='upper right')
+        
         plt.tight_layout()
         plt.show(block=False)
 
