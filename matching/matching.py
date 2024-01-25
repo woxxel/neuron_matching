@@ -41,7 +41,7 @@ from matplotlib import pyplot as plt, rc, colors as mcolors, patches as mppatche
 
 from matplotlib.widgets import Slider
 
-from .utils import pickleData, load_field_from_hdf5, center_of_mass, calculate_img_correlation, get_shift_and_flow, build_remap_from_shift_and_flow, fun_wrapper, load_dict_from_hdf5, normalize_sparse_array
+from .utils import pickleData, load_field_from_hdf5, center_of_mass, calculate_img_correlation, get_shift_and_flow, build_remap_from_shift_and_flow, fun_wrapper, load_dict_from_hdf5, normalize_sparse_array, replace_relative_path
 from .utils import plot_with_confidence, add_number
 from .parameters import matchingParams
 from .fit_functions import functions
@@ -1065,6 +1065,8 @@ class matching:
         dataLd = pickleData([],pathLd,'load')
         self.results = dataLd['results']
         self.data = dataLd['data']
+
+        self.paths['sessions'] = replace_relative_path(self.paths['sessions'],self.paths['data'])
         #try:
           #self.results['assignments'] = self.results['assignment']
         #except:

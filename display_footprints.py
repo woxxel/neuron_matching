@@ -50,17 +50,17 @@ for s,path in enumerate(paths):
             indptr[:]), shape[:])
         
         # if s>0:
-        #     x_remap,y_remap = build_remap_from_shift_and_flow(dims,sessionData[s]['remap']['shift'],sessionData[s]['remap']['flow'] if use_opt_flow else None)
+            # x_remap,y_remap = build_remap_from_shift_and_flow(dims,sessionData[s]['remap']['shift'],sessionData[s]['remap']['flow'] if use_opt_flow else None)
             
-        #     A[s] = sp.sparse.hstack([
-        #         sp.sparse.csc_matrix(                    # cast results to sparse type
-        #             cv2.remap(
-        #                 fp.reshape(dims),   # reshape image to original dimensions
-        #                 x_remap, y_remap,                 # apply reverse identified shift and flow
-        #                 cv2.INTER_CUBIC                 
-        #             ).reshape(-1,1)                       # reshape back to allow sparse storage
-        #             ) for fp in footprints.toarray().T        # loop through all footprints
-        #         ])
+            # A[s] = sp.sparse.hstack([
+            #     sp.sparse.csc_matrix(                    # cast results to sparse type
+            #         cv2.remap(
+            #             fp.reshape(dims),   # reshape image to original dimensions
+            #             x_remap, y_remap,                 # apply reverse identified shift and flow
+            #             cv2.INTER_CUBIC                 
+            #         ).reshape(-1,1)                       # reshape back to allow sparse storage
+            #         ) for fp in footprints.toarray().T        # loop through all footprints
+            #     ])
         # else:
         #     A[s] = footprints
 

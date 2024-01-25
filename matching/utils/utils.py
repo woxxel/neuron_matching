@@ -40,6 +40,11 @@ def pickleData(dat,path,mode='load',prnt=True):
     return dat
 
 
+def replace_relative_path(paths,newPath):
+            prepath = os.path.commonpath(paths)
+            return [os.path.join(newPath,os.path.relpath(path,prepath)) for path in paths]
+        
+
 def load_field_from_hdf5(filePath,field):
 
     '''
@@ -306,6 +311,10 @@ def fun_wrapper(fun,x,p):
     if p.shape[-1] == 7:
       return fun(x,p[...,0],p[...,1],p[...,2],p[...,3],p[...,4],p[...,5],p[...,6])
 
+
+def replace_relative_path(paths,newPath):
+    prepath = os.path.commonpath(paths)
+    return [os.path.join(newPath,os.path.relpath(path,prepath)) for path in paths]
 
 
 def load_dict_from_hdf5(filename:str) -> Dict:
