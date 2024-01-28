@@ -1,4 +1,2 @@
-# this should be integrated as custom function
-# from caiman.utils.utils import load_dict_from_hdf5
-
-from .matching import *
+from .neuron_matching import *
+from .utils.parameters import matchingParams as matching_params

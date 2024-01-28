@@ -16,7 +16,7 @@
         - 'remap' into 'alignment' structure in results
         - cm only needed once
   
-  last updated on January 9th, 2024
+  last updated on January 28th, 2024
 '''
 
 
@@ -29,24 +29,12 @@ from scipy.io import loadmat
 from scipy.optimize import curve_fit, linear_sum_assignment
 import scipy.stats as sstats
 
-from matplotlib import pyplot as plt, rc, colors as mcolors, patches as mppatches, lines as mplines
-from matplotlib.cm import get_cmap
-
-# from plotly import graph_objects as go, express as px
-# from plotly.subplots import make_subplots
-
-# import dash
-# from dash import dcc,html
-# from dash.dependencies import Input, Output
+from matplotlib import pyplot as plt, rc, colors as mcolors, patches as mppatches, lines as mplines, cm
 
 from caiman.utils.utils import load_dict_from_hdf5
 from matplotlib.widgets import Slider
 
-from .utils import pickleData, load_field_from_hdf5, center_of_mass, calculate_img_correlation, get_shift_and_flow, build_remap_from_shift_and_flow, fun_wrapper, normalize_sparse_array, replace_relative_path
-from .utils import plot_with_confidence, add_number
-from .utils import calculate_statistics#, calculate_p
-from .parameters import matchingParams
-from .fit_functions import functions
+from .utils import *
 
 logging.basicConfig(level=logging.INFO)
 
@@ -245,8 +233,9 @@ class matching:
         self.nS = len(self.paths['sessions'])
         self.progress = tqdm.tqdm(enumerate(self.paths['sessions']),total=self.nS)
 
-        s_ref = 0
+        # s_ref = 0
         for (s,self.currentPath) in self.progress:
+            # self.log.error(f'now processing session {self.currentPath}')
             self.data[s] = copy.deepcopy(self.data_blueprint)
             self.data[s]['filePath'] = self.currentPath
 
@@ -383,7 +372,7 @@ class matching:
                 )
 
                 idx_fp = 1 if self.params['model'] == 'shifted' else 0
-                self.data[s]['p_same'] = self.calculate_p(self.data_cross['D_ROIs'],self.data_cross['fp_corr'][idx_fp,...],
+                self.data[s]['p_same'] = calculate_p(self.data_cross['D_ROIs'],self.data_cross['fp_corr'][idx_fp,...],
                             self.model['f_same'],self.params['neighbor_distance']/self.params['pxtomu'])
 
 
@@ -490,9 +479,9 @@ class matching:
             * implement min/max thresholding (maybe shift thresholding to other part of code?)
         '''
         # print(loadPath)
+        ext = os.path.splitext(loadPath)[-1]  # obtain extension
+
         if os.path.exists(loadPath):
-            
-            ext = os.path.splitext(loadPath)[-1]  # obtain extension
             if ext=='.hdf5':
                 ld = load_dict_from_hdf5(loadPath)    # function from CaImAn
             elif ext=='.mat':
@@ -2183,7 +2172,7 @@ class matching:
         
         n_arr = np.random.choice(np.where(active.sum(1)>10)[0],nDisp)
         # n_arr = np.random.randint(0,cluster.meta['nC'],nDisp)
-        cmap = get_cmap('tab20')
+        cmap = cm.get_cmap('tab20')
         ax_3D.set_prop_cycle(color=cmap.colors)
         # print(self.results['cm'][n_arr,:,0],self.results['cm'][n_arr,:,0].shape)
         for n in n_arr:

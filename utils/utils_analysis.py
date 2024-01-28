@@ -94,7 +94,7 @@ def calculate_p(d_ROIs,fp_corr,p_model,neighbor_distance=12):
     '''
 
     ## evaluate probability-function for each of a neurons neighbors
-    print(neighbor_distance)
+    # print(neighbor_distance)
     neighbors = d_ROIs < neighbor_distance
     p_same = np.zeros_like(d_ROIs)
     p_same[neighbors] = p_model.ev(d_ROIs[neighbors],fp_corr[neighbors])

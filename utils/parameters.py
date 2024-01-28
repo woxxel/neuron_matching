@@ -1,5 +1,4 @@
-import os
-
+# import os
 
 class matchingParams:
     def __init__(self,mousePath,paths):
