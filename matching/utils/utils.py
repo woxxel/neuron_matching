@@ -13,7 +13,7 @@
         [should be possible via spread-operator - test that!]
 '''
 
-import pickle, cv2, os
+import pickle, cv2, os, tqdm
 import scipy as sp
 from scipy import signal
 import numpy as np
@@ -156,6 +156,7 @@ def calculate_img_correlation(A1,A2,dims=(512,512),crop=False,cm_crop=None,binar
     idx_max = np.unravel_index(np.argmax(C),C.shape)
     img_shift = np.subtract(idx_max,crop_half)
 
+    # plot_bool = True
     if (plot_bool):# | ((C_max>0.95)&(C_max<0.9999)):
       #idx_max = np.where(C.real==C_max)
       plt.figure()
@@ -292,6 +293,7 @@ def normalize_sparse_array(A,relative_threshold=0.001,minimum_nonzero_entries=50
       for a in A.T                                      # loop through all footprints
     ]).T
 
+
 def fun_wrapper(fun,x,p):
     '''
       
@@ -316,74 +318,3 @@ def replace_relative_path(paths,newPath):
     prepath = os.path.commonpath(paths)
     return [os.path.join(newPath,os.path.relpath(path,prepath)) for path in paths]
 
-
-def load_dict_from_hdf5(filename:str) -> Dict:
-    ''' Load dictionary from hdf5 file
-
-    Args:
-        filename: str
-            input file to load
-    Returns:
-        dictionary
-    '''
-
-    with h5py.File(filename, 'r') as h5file:
-        return recursively_load_dict_contents_from_group(h5file, '/')
-
-
-def recursively_load_dict_contents_from_group(h5file:h5py.File, path:str) -> Dict:
-    ''' load dictionary from hdf5 object
-    Args:
-        h5file: hdf5 object
-            object where dictionary is stored
-        path: str
-            path within the hdf5 file
-
-    Starting with Caiman 1.9.9 we started saving strings as attributes rather than independent datasets,
-    which gets us a better syntax and less damage to the strings, at the cost of scanning properly for them
-    being a little more involved. In future versions of Caiman we may store all scalars as attributes.
-
-    There's some special casing here that should be solved in a more general way; anything serialised into
-    hdf5 and then deserialised should probably go back through the class constructor, and revalidated
-    so all the fields end up with appropriate data types.
-    '''
-
-    ans:Dict = {}
-    for akey, aitem in h5file[path].attrs.items():
-        ans[akey] = aitem
-
-    for key, item in h5file[path].items():
-        if isinstance(item, h5py._hl.dataset.Dataset):
-            val_set = np.nan
-            if isinstance(item[()], str):
-                if item[()] == 'NoneType':
-                    ans[key] = None
-                else:
-                    ans[key] = item[()]
-
-            elif key in ['dims', 'medw', 'sigma_smooth_snmf', 'dxy', 'max_shifts', 'strides', 'overlaps']:
-                if isinstance(item[()], np.ndarray):
-                    ans[key] = tuple(item[()])
-                else:
-                    ans[key] = item[()]
-            else:
-                if isinstance(item[()], np.bool_): # sigh
-                    ans[key] = bool(item[()])
-                else:
-                    ans[key] = item[()]
-                    if isinstance(ans[key], bytes) and ans[key] == b'NoneType':
-                        ans[key] = None
-
-        elif isinstance(item, h5py._hl.group.Group):
-            if key in ('A', 'W', 'Ab', 'downscale_matrix', 'upscale_matrix'):
-                data =  item[path + key + '/data']
-                indices = item[path + key + '/indices']
-                indptr = item[path + key + '/indptr']
-                shape = item[path + key + '/shape']
-                ans[key] = sp.sparse.csc_matrix((data[:], indices[:],
-                    indptr[:]), shape[:])
-                if key in ('W', 'upscale_matrix'):
-                    ans[key] = ans[key].tocsr()
-            else:
-                ans[key] = recursively_load_dict_contents_from_group(h5file, path + key + '/')
-    return ans

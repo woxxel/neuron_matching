@@ -10,9 +10,10 @@ class matchingParams:
             'pxtomu':       530.68/512, #200./512, # real distance between pixels in \mu m
 
             'nbins':        128,        # number of bins for the count histogram (should be n^2)
-            'neighbor_distance': 12,    # \mu m distance up to which neurons are considered to be neighbors
+            'neighbor_distance': 15,    # \mu m distance up to which neurons are considered to be neighbors
             'model':        'shifted',  # ['shifted','unshifted','both'] - specifies whether to use maximum possible footprint correlation by shifting
-            
+            'binary':       False,
+
             'use_kde':      True,       # whether to use (True) or not (False) kernel density estimation to remove statistics from low/high density regions
             'qtl':          [0.05,0.95],# specifies range of densities from kde to include in statistics 
 
@@ -24,6 +25,8 @@ class matchingParams:
 
             'min_session_correlation':   0.1,        # minimum value of correlation between session footprints to include data in matching
         }
+
+
 
         self.paths = {
             'sessions':     paths,      # list of paths to CaImAn result files to be processed in order
