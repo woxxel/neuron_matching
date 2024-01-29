@@ -1,7 +1,7 @@
 # import os
 
 class matchingParams:
-    def __init__(self,mousePath,paths):
+    def __init__(self,mousePath,paths,suffix=''):
 
         self.params = {
 
@@ -17,10 +17,16 @@ class matchingParams:
             'qtl':          [0.05,0.95],# specifies range of densities from kde to include in statistics 
 
             ## evaluation thresholds
-            'SNR_thr':      2.,         # signal-to-noise ratio
-            'r_thr':        0.5,        # r_value
-            'CNN_thr':      0.6,        # cnn-classifier value
+            # 'SNR_thr':      2.,         # signal-to-noise ratio
+            # 'r_thr':        0.5,        # r_value
+            # 'CNN_thr':      0.6,        # cnn-classifier value
 
+            'min_SNR': 2.5,
+            'SNR_lowest': 1.0,
+            'rval_thr': 0.8,
+            'rval_lowest': -1,
+            'min_cnn_thr': 0.9,
+            'cnn_lowest': 0.1,
 
             'min_session_correlation':   0.1,        # minimum value of correlation between session footprints to include data in matching
         }
@@ -30,6 +36,7 @@ class matchingParams:
         self.paths = {
             'sessions':     paths,      # list of paths to CaImAn result files to be processed in order
             'data':         mousePath,   # path to which results are stored and loaded from
+            'suffix':       suffix,
         }
 
         # return params
