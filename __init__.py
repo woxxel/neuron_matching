@@ -1,2 +1,2 @@
 from .neuron_matching import *
-from .utils.parameters import matchingParams as matching_params
+from .utils.parameters import matching_params

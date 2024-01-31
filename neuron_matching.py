@@ -54,9 +54,13 @@ class matching:
         self.log = logging.getLogger("matchinglogger")
         self.log.setLevel(logLevel)
 
-        mP = matching_params(mousePath,paths,suffix)
-        self.params = mP.params
-        self.paths = mP.paths
+        # mP = matching_params
+        self.params = matching_params
+        self.paths = {
+            'sessions':     paths,      # list of paths to CaImAn result files to be processed in order
+            'data':         mousePath,   # path to which results are stored and loaded from
+            'suffix':       suffix,
+        }
 
         self.update_bins(self.params['nbins'])
 
@@ -1007,7 +1011,7 @@ class matching:
         if ~os.path.exists(svDir):
             os.makedirs(svDir,exist_ok=True)
         
-        pathSv = os.path.join(self.paths['data'],'matching','neuron_registration{suffix}.pkl')
+        pathSv = os.path.join(self.paths['data'],'matching',f'neuron_registration{suffix}.pkl')
         with open(pathSv,'wb') as f:
             pickle.dump({'results':self.results,'data':self.data},f)
 
