@@ -1018,7 +1018,7 @@ class matching:
 
     def load_registration(self,suffix=''):
 
-        pathLd = os.path.join(self.paths['data'],'matching','neuron_registration{suffix}.pkl')
+        pathLd = os.path.join(self.paths['data'],'matching',f'neuron_registration{suffix}.pkl')
         dataLd = pickleData([],pathLd,'load')
         self.results = dataLd['results']
         self.data = dataLd['data']
