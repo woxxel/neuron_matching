@@ -34,7 +34,7 @@ logging.basicConfig(level=logging.INFO)
 
 class matching:
 
-    def __init__(self,mousePath=None,paths=None,fileName_results='OnACID_results.hdf5',suffix='',logLevel=logging.ERROR):
+    def __init__(self,mousePath=None,paths=None,fileName_results='OnACID_results',suffix='',logLevel=logging.ERROR):
         
         '''
             TODO:
@@ -44,6 +44,7 @@ class matching:
                     - remap in results, not data (shift=0,corr=1)
                     - p_same containing best and best_without_match value and being in results
         '''
+        fileName_results = fileName_results + suffix + '.hdf5'
         if not mousePath:
             mousePath = 'data/555wt'
         if not paths:
@@ -1007,19 +1008,20 @@ class matching:
 
     def save_registration(self,suffix=''):
 
-        svDir = os.path.join(self.paths['data'],'matching')
-        if ~os.path.exists(svDir):
-            os.makedirs(svDir,exist_ok=True)
+        pathMatching = os.path.join(self.paths['data'],'matching')
+        if ~os.path.exists(pathMatching):
+            os.makedirs(pathMatching,exist_ok=True)
         
-        pathSv = os.path.join(self.paths['data'],'matching',f'neuron_registration{suffix}.pkl')
+        pathSv = os.path.join(pathMatching,f'neuron_registration{suffix}.pkl')
         with open(pathSv,'wb') as f:
             pickle.dump({'results':self.results,'data':self.data},f)
 
 
     def load_registration(self,suffix=''):
 
-        pathLd = os.path.join(self.paths['data'],'matching',f'neuron_registration{suffix}.pkl')
-        dataLd = pickleData([],pathLd,'load')
+        pathLd = os.path.join(self.paths['data'],f'matching/neuron_registration{suffix}.pkl')
+        with open(pathLd,'rb') as f:
+            dataLd = pickle.load(f)
         self.results = dataLd['results']
         self.data = dataLd['data']
 
