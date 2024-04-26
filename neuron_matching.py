@@ -2563,9 +2563,11 @@ class matching:
         # pathSession1 = pathcat([cluster.meta['pathMouse'],'Session%02d/results_redetect.mat'%1])
         # ROIs1_ld = loadmat(pathSession1)
         s_ = 0
+        print(self.paths['sessions'][s_])
         ROIs1_ld = load_dict_from_hdf5(self.paths['sessions'][s_])
-        # Cn = np.array(ROIs1_ld['A'].sum(1).reshape(dims))
-        Cn = ROIs1_ld['Cn'].T
+        print(ROIs1_ld.keys())
+        Cn = np.array(ROIs1_ld['A'].sum(1).reshape(dims))
+        # Cn = ROIs1_ld['Cn'].T
         Cn -= Cn.min()
         Cn /= Cn.max()
         # if self.data[_s]['remap']['transposed']:
@@ -2668,8 +2670,8 @@ class matching:
 
                     ROIs2_ld = load_dict_from_hdf5(self.paths['sessions'][s])
 
-                    # Cn2 = np.array(ROIs2_ld['A'].sum(1).reshape(dims))
-                    Cn2 = ROIs2_ld['Cn'].T
+                    Cn2 = np.array(ROIs2_ld['A'].sum(1).reshape(dims))
+                    # Cn2 = ROIs2_ld['Cn'].T
                     Cn2 -= Cn2.min()
                     Cn2 /= Cn2.max()
                     # if self.data[s]['remap']['transposed']:
@@ -2730,7 +2732,10 @@ class matching:
                             col = [0.6,0.6,0.6]
                         else:
                             col = 'tab:red'
-                        ax_sShift_all.arrow(0,0,self.data[ss]['remap']['shift'][0],self.data[ss]['remap']['shift'][1],color=col,linewidth=0.5)
+                        try:
+                            ax_sShift_all.arrow(0,0,self.data[ss]['remap']['shift'][0],self.data[ss]['remap']['shift'][1],color=col,linewidth=0.5)
+                        except:
+                            pass
                     ax_sShift_all.arrow(0,0,self.data[s]['remap']['shift'][0],self.data[s]['remap']['shift'][1],color='k',linewidth=0.5)
                     ax_sShift_all.yaxis.set_label_position("right")
                     ax_sShift_all.yaxis.tick_right()
