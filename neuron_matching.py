@@ -203,7 +203,7 @@ class matching:
 
     
     def run_matching(self,p_thr=[0.3,0.05]):
-        print('Now running matching procedue in %s'%self.paths['data'])
+        print('Now running matching procedure in %s'%self.paths['data'])
 
         print('Building model for matching ...')
         self.build_model(save_results=True)
@@ -454,13 +454,28 @@ class matching:
 
 
         ## some post-processing to create cluster-structures values / statistics
+
         self.results['cm'] = np.zeros(self.results['assignments'].shape + (2,)) * np.NaN
         for key in ['SNR_comp','r_values','cnn_preds']:
             self.results[key] = np.zeros_like(self.results['assignments'])
         
         # for s in range(self.nS):
+        self.results['remap'] = {
+            'shift': np.zeros((self.nS,2)),
+            'transposed': np.zeros(self.nS,'bool'),
+            'corr': np.zeros(self.nS),
+        }
+        self.results['filePath'] = ['']*self.nS
+
+        has_reference = False
         for s in self.data:
             if s=='joint' or self.data[s]['skipped']: continue
+
+            self.results['remap']['transposed'][s] = self.data[s]['remap']['transposed'] if has_reference else False
+            self.results['remap']['shift'][s,:] = self.data[s]['remap']['shift'] if has_reference else [0,0]
+            self.results['remap']['corr'][s] = self.data[s]['remap']['c_max'] if has_reference else 1
+
+            self.results['filePath'][s] = self.data[s]['filePath']
             
             idx_c = np.where(~np.isnan(self.results['assignments'][:,s]))[0]
             idx_n = self.results['assignments'][idx_c,s].astype('int')
@@ -470,9 +485,12 @@ class matching:
                     self.results[key][idx_c,s,...] = self.data[s][key][idx_n,...]
                 except:
                     pass
+            
+            has_reference = True
         # finally, save results
         if save_results:
             self.save_registration(suffix=self.paths['suffix'])
+            self.save_data(suffix=self.paths['suffix'])
 
 
     def load_footprints(self,loadPath,s=None,store_data=False):
@@ -978,7 +996,8 @@ class matching:
     ### -------------------- SAVING & LOADING ---------------------- ###
 
     def save_model(self,suffix=''):
-      
+        
+        fix_suffix(suffix)
         pathMatching = os.path.join(self.paths['data'],'matching')
         if ~os.path.exists(pathMatching):
             os.makedirs(pathMatching,exist_ok=True)
@@ -994,6 +1013,7 @@ class matching:
 
     def load_model(self,suffix=''):
         
+        suffix = fix_suffix(suffix)
         pathLd = os.path.join(self.paths['data'],f'matching/match_model{suffix}.pkl')
         with open(pathLd,'rb') as f:
             results = pickle.load(f)
@@ -1007,23 +1027,38 @@ class matching:
     
 
     def save_registration(self,suffix=''):
-
+        
+        suffix = fix_suffix(suffix)
         pathMatching = os.path.join(self.paths['data'],'matching')
         if ~os.path.exists(pathMatching):
             os.makedirs(pathMatching,exist_ok=True)
         
         pathSv = os.path.join(pathMatching,f'neuron_registration{suffix}.pkl')
         with open(pathSv,'wb') as f:
-            pickle.dump({'results':self.results,'data':self.data},f)
+            # pickle.dump({'results':self.results,'data':self.data},f)
+            pickle.dump(self.results,f)
+
+
+    def save_data(self,suffix=''):
+
+        suffix = fix_suffix(suffix)
+        pathMatching = os.path.join(self.paths['data'],'matching')
+        if ~os.path.exists(pathMatching):
+            os.makedirs(pathMatching,exist_ok=True)
+
+        pathSv = os.path.join(pathMatching,f'matching_data{suffix}.pkl')
+        with open(pathSv,'wb') as f:
+            pickle.dump(self.data,f)
 
 
     def load_registration(self,suffix=''):
 
+        suffix = fix_suffix(suffix)
         pathLd = os.path.join(self.paths['data'],f'matching/neuron_registration{suffix}.pkl')
         with open(pathLd,'rb') as f:
-            dataLd = pickle.load(f)
-        self.results = dataLd['results']
-        self.data = dataLd['data']
+            self.results = pickle.load(f)
+        # self.results = dataLd['results']
+        # self.data = dataLd['data']
 
         self.paths['sessions'] = replace_relative_path(self.paths['sessions'],self.paths['data'])
         #try:
@@ -1031,6 +1066,14 @@ class matching:
         #except:
           #1
 
+    def load_data(self,suffix=''):
+
+        suffix = fix_suffix(suffix)
+        pathLd = os.path.join(self.paths['data'],f'matching/matching_data{suffix}.pkl')
+        with open(pathLd,'rb') as f:
+            self.data = pickle.load(f)
+        # self.paths['sessions'] = replace_relative_path(self.paths['sessions'],self.paths['data'])
+        
 
     def find_confusion_candidates(self,confusion_distance=5):
        
@@ -3159,3 +3202,10 @@ def scale_down_counts(counts,times=1):
     return scale_down_counts(cts,times-1)
 
 
+
+
+def fix_suffix(suffix):
+    if suffix:
+        if not suffix.startswith('_'):
+            suffix = '_' + suffix
+    return suffix
