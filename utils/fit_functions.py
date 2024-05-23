@@ -1,9 +1,10 @@
 import math
 import numpy as np
-import scipy as sp
+from scipy.special import erf
+from scipy.stats import skewnorm as skewed_gauss
 
 phi = lambda x : 1/np.sqrt(2*np.pi)*np.exp(-1/2*x**2)
-psi = lambda x : 1/2*(1 + sp.special.erf(x/np.sqrt(2)))
+psi = lambda x : 1/2*(1 + erf(x/np.sqrt(2)))
 
 functions = {
       
@@ -17,6 +18,8 @@ functions = {
     'lognorm_reverse_shifted': lambda x,sigma,mu,s : 1/((-x+s)*sigma*np.sqrt(2*np.pi))*np.exp(-(np.log(-x+s)-mu)**2/(2*sigma**2)),
     
     'gauss': lambda x,sigma,mu : 1/np.sqrt(2*np.pi*sigma**2)*np.exp(-(x-mu)**2/(2*sigma**2)),
+
+    'skewed_gauss': lambda x,sigma,mu : skewed_gauss.pdf(x,-1.,sigma,mu),
 
 
     

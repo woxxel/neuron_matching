@@ -44,6 +44,11 @@ class matching:
                     - remap in results, not data (shift=0,corr=1)
                     - p_same containing best and best_without_match value and being in results
         '''
+
+        ## make sure suffix starts with '_'
+        if suffix and suffix[0] != '_':
+            suffix = '_' + suffix
+        
         fileName_results = fileName_results + suffix + '.hdf5'
         if not mousePath:
             mousePath = 'data/555wt'
@@ -85,11 +90,6 @@ class matching:
             'fp_corr':  [],
         }
 
-        neighbor_dictionary = {
-            'NN':    [],
-            'nNN':   [],
-            'all':   []
-          }
         
         self.status = {
             'counts_calculated': False,
@@ -99,49 +99,17 @@ class matching:
         }
 
         self.model = {
-            'counts':                 np.zeros((self.params['nbins'],self.params['nbins'],3)),
-            'counts_unshifted':       np.zeros((self.params['nbins'],self.params['nbins'],3)),
-            'counts_same':            np.zeros((self.params['nbins'],self.params['nbins'])),
-            'counts_same_unshifted':  np.zeros((self.params['nbins'],self.params['nbins'])),
-            
-            'fit_function': {
-               'single': {
-                  'distance':         copy.deepcopy(neighbor_dictionary),
-                  'correlation':      copy.deepcopy(neighbor_dictionary)
-               },
-               'joint': {
-                  'distance':         copy.deepcopy(neighbor_dictionary),
-                  'correlation':      copy.deepcopy(neighbor_dictionary)
-               }
-              },
-            
-            'fit_parameter': {
-               'single': {
-                  'distance':       copy.deepcopy(neighbor_dictionary),
-                  'correlation':    copy.deepcopy(neighbor_dictionary)
-                  },
-                'joint': {}
-              },
-            
-            'pdf': {
-               'single': {
-                  'distance':       [],
-                  'correlation': []
-                  },
-                'joint': []
-              },
-            
-            'p_same': {
-               'single': {},
-                'joint': []
-              },
-            
-            'f_same':         False,
+            'counts':                 np.zeros((self.params['nbins'],self.params['nbins'],3),'int'),
+            'counts_unshifted':       np.zeros((self.params['nbins'],self.params['nbins'],3),'int'),
+            'counts_same':            np.zeros((self.params['nbins'],self.params['nbins']),'int'),
+            'counts_same_unshifted':  np.zeros((self.params['nbins'],self.params['nbins']),'int'),
+
             'kernel': {
                 'idxes':   {},
                 'kde':     {}
               },
-          }
+        }
+
 
         # ## defines the functions to fit to the count histograms for calculation of p_same
         # self.model['fit_functions'] = {
@@ -202,14 +170,14 @@ class matching:
        
 
     
-    def run_matching(self,p_thr=[0.3,0.05]):
+    def run_matching(self,p_thr=[0.3,0.05],save_results=True):
         print('Now running matching procedure in %s'%self.paths['data'])
 
         print('Building model for matching ...')
-        self.build_model(save_results=True)
+        self.build_model(save_results=save_results)
         
         print('Matching neurons ...')
-        self.register_neurons(save_results=True,p_thr=p_thr)
+        self.register_neurons(save_results=save_results,p_thr=p_thr)
         
         print('Done!')
 
@@ -234,11 +202,12 @@ class matching:
 
         # s_ref = 0
         for (s,self.currentPath) in self.progress:
-            # self.log.error(f'now processing session {self.currentPath}')
+            self.log.debug(f'now processing session {self.currentPath}')
             self.data[s] = copy.deepcopy(self.data_blueprint)
             self.data[s]['filePath'] = self.currentPath
 
             self.A = self.load_footprints(self.currentPath,s,store_data=True)
+            
             if isinstance(self.A,bool): continue
 
             if not (self.A is None):
@@ -255,9 +224,9 @@ class matching:
                 ## calculating various statistics
                 self.data[s]['idx_eval'] &= (np.diff(self.A.indptr) != 0) ## finding non-empty rows in sparse array (https://mike.place/2015/sparse/)
 
-                print('\n idx evals:',self.data[s]['idx_eval'].sum())
+                # print('\n idx evals:',self.data[s]['idx_eval'].sum())
                 self.data[s]['nA'][0] = self.A.shape[1]    # number of neurons
-                self.data[s]['cm'] = center_of_mass(self.A,self.params['dims'][0],self.params['dims'][1])
+                self.data[s]['cm'] = center_of_mass(self.A,self.params['dims'][0],self.params['dims'][1],convert=self.params['pxtomu'])
 
                 self.progress.set_description('Calculate self-referencing statistics for %s'%self.currentPath)
 
@@ -265,7 +234,7 @@ class matching:
                 self.data_cross['D_ROIs'],self.data_cross['fp_corr'], idx_remove = calculate_statistics(
                    self.A,idx_eval=self.data[s]['idx_eval'],
                    SNR_comp=self.data[s]['SNR_comp'],C=self.data_tmp['C'],
-                   binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance']/self.params['pxtomu'],model=self.params['model'],
+                   binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance'],convert=self.params['pxtomu'],model=self.params['model'],
                    dims=self.params['dims']
                 )
                 # print('\n idx remove:',idx_remove)
@@ -282,7 +251,7 @@ class matching:
                     self.progress.set_description('Calculate cross-statistics for %s'%self.currentPath)
                     self.data_cross['D_ROIs'],self.data_cross['fp_corr'],_ = calculate_statistics(
                         self.A,A_ref=self.A_ref,idx_eval=self.data[s]['idx_eval'],idx_eval_ref=self.data[s_ref]['idx_eval'],
-                        binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance']/self.params['pxtomu'],model=self.params['model'],
+                        binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance'],convert=self.params['pxtomu'],model=self.params['model'],
                         dims=self.params['dims']
                     )        # calculating distances and footprint correlations
                     self.progress.set_description('Update model with data from %s'%self.currentPath)
@@ -304,7 +273,8 @@ class matching:
           This function iterates through sessions chronologically to create a set of all detected neurons, matched to one another based on the created model
 
             p_thr - (list of floats)
-                2 entry-list, specifying probability above which matches are accepted [0] and above which losing contenders for a match are removed from the data [1]
+                2 entry-list, specifying probability above which matches are accepted [0] 
+                and above which losing contenders for a match are removed from the data [1]
         '''
 
         self.params['model'] = model
@@ -326,7 +296,7 @@ class matching:
             else:
                 self.data[s]['skipped'] = False
                 break
-        self.progress = tqdm.tqdm(zip(range(s+1,self.nS),self.paths['sessions'][s+1:]),total=self.nS,leave=True)
+        self.progress = tqdm.tqdm(zip(range(s+1,self.nS),self.paths['sessions'][s+1:]),total=self.nS-1,leave=True)
         
         self.prepare_footprints(align_to_reference=False)
         self.Cn_ref = self.data_tmp['Cn']
@@ -337,12 +307,13 @@ class matching:
         self.data['joint'] = copy.deepcopy(self.data_blueprint)
         self.data['joint']['nA'][0] = self.A_ref.shape[1]
         self.data['joint']['idx_eval'] = np.ones(self.data['joint']['nA'][0],'bool')
-        self.data['joint']['cm'] = center_of_mass(self.A_ref,self.params['dims'][0],self.params['dims'][1])
+        self.data['joint']['cm'] = center_of_mass(self.A_ref,self.params['dims'][0],self.params['dims'][1],convert=self.params['pxtomu'])
 
         ## prepare and initialize assignment- and p_matched-arrays for storing results
         self.results = {
           'assignments': np.full((self.data[s]['nA'][1],self.nS),np.NaN),
-          'p_matched': np.full((self.data[s]['nA'][1],self.nS,2),np.NaN)
+          'p_matched': np.full((self.data[s]['nA'][1],self.nS,2),np.NaN),
+          'Cn_corr': np.full((self.nS,self.nS),np.NaN),
         }
         self.results['assignments'][:,s] = np.where(self.data[s]['idx_eval'])[0]
         self.results['p_matched'][:,0,0] = 1
@@ -353,6 +324,13 @@ class matching:
             if isinstance(self.A,bool): 
                 self.data[s]['skipped'] = True
                 continue
+
+            for s0 in range(s):
+                # self.progress.set_description('Calculate image correlations for Session %d'%s)
+                if 'Cn' in self.data[s0].keys():
+                    c_max,_ = calculate_img_correlation(self.data[s0]['Cn'],self.data[s]['Cn'],plot_bool=False)
+                    self.results['Cn_corr'][s0,s] = self.results['Cn_corr'][s,s0] = c_max
+
             
             if not (self.A is None):
                 self.data[s]['skipped'] = False
@@ -364,20 +342,20 @@ class matching:
                 if not prepared: continue
                 
                 self.data[s]['remap'] = out_para
-                self.data[s]['cm'] = center_of_mass(self.A,self.params['dims'][0],self.params['dims'][1])
+                self.data[s]['cm'] = center_of_mass(self.A,self.params['dims'][0],self.params['dims'][1],convert=self.params['pxtomu'])
                 
 
                 ## calculate matching probability between each pair of neurons 
                 self.progress.set_description('A union size: %d, Calculate statistics for Session #%d'%(self.data['joint']['nA'][0],s))
                 self.data_cross['D_ROIs'],self.data_cross['fp_corr'],_ = calculate_statistics(
                     self.A,A_ref=self.A_ref,idx_eval=self.data[s]['idx_eval'],idx_eval_ref=self.data['joint']['idx_eval'],
-                    binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance']/self.params['pxtomu'],model=self.params['model'],
+                    binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance'],convert=self.params['pxtomu'],model=self.params['model'],
                     dims=self.params['dims']
                 )
 
                 idx_fp = 1 if self.params['model'] == 'shifted' else 0
                 self.data[s]['p_same'] = calculate_p(self.data_cross['D_ROIs'],self.data_cross['fp_corr'][idx_fp,...],
-                            self.model['f_same'],self.params['neighbor_distance']/self.params['pxtomu'])
+                            self.model['f_same'],self.params['neighbor_distance'])
 
 
                 ## run hungarian algorithm (HA) with (1-p_same) as score
@@ -385,20 +363,24 @@ class matching:
                 matches = linear_sum_assignment(1 - self.data[s]['p_same'].toarray())
                 p_matched = self.data[s]['p_same'].toarray()[matches]
                 
-
                 idx_TP = np.where(p_matched > p_thr[0])[0] ## thresholding results (HA matches all pairs, but we only want matches above p_thr)
                 if len(idx_TP) > 0:
                     matched_ref = matches[0][idx_TP]    # matched neurons in s_ref
                     matched = matches[1][idx_TP]        # matched neurons in s
+                    # print(idx_TP,matched_ref)
+                else:
+                    matched_ref = np.array([],'int')
+                    matched = np.array([],'int')
+                
 
-                    ## find neurons which were not matched in current and reference session
-                    non_matched_ref = np.setdiff1d(list(range(self.data['joint']['nA'][0])), matched_ref)
-                    non_matched = np.setdiff1d(list(np.where(self.data[s]['idx_eval'])[0]), matches[1][idx_TP])
-                    non_matched = non_matched[self.data[s]['idx_eval'][non_matched]]
+                ## find neurons which were not matched in current and reference session
+                non_matched_ref = np.setdiff1d(list(range(self.data['joint']['nA'][0])), matched_ref)
+                non_matched = np.setdiff1d(list(np.where(self.data[s]['idx_eval'])[0]), matches[1][idx_TP])
+                non_matched = non_matched[self.data[s]['idx_eval'][non_matched]]
 
-                    ## calculate number of matches found
-                    TP = np.sum(p_matched > p_thr[0]).astype('float32')
-
+                # print(matched,non_matched)
+                ## calculate number of matches found
+                TP = np.sum(p_matched > p_thr[0]).astype('float32')
                 self.A_ref = self.A_ref.tolil()
                 
                 ## update footprint shapes of matched neurons with A_ref = (1-p/2)*A_ref + p/2*A to maintain part or all of original shape, depending on p_matched
@@ -422,7 +404,7 @@ class matching:
                 ## update union data
                 self.data['joint']['nA'][0] = self.A_ref.shape[1]
                 self.data['joint']['idx_eval'] = np.ones(self.data['joint']['nA'][0],'bool')
-                self.data['joint']['cm'] = center_of_mass(self.A_ref,self.params['dims'][0],self.params['dims'][1])
+                self.data['joint']['cm'] = center_of_mass(self.A_ref,self.params['dims'][0],self.params['dims'][1],convert=self.params['pxtomu'])
 
                 
                 ## write neuron indices of neurons from this session
@@ -512,10 +494,15 @@ class matching:
                 self.log.error('File extension not yet implemented for loading data!')
                 return False
             if 'Cn' in ld.keys():
-                self.data_tmp['Cn'] = ld['Cn'].T
+                Cn = ld['Cn'].T
             else:
                 self.log.warning('Cn not in result files. constructing own Cn from footprints!')
-                self.data_tmp['Cn'] = np.array(ld['A'].sum(axis=1).reshape(*self.params['dims']))
+                Cn = np.array(ld['A'].sum(axis=1).reshape(*self.params['dims']))
+            
+            self.data_tmp['Cn'] = Cn
+            if s:
+                self.data[s]['Cn'] = Cn
+            
             ## load some data necessary for further processing
             self.data_tmp['C'] = ld['C']
             if store_data & np.all([key in ld.keys() for key in ['SNR_comp','r_values','cnn_preds']]):
@@ -587,6 +574,10 @@ class matching:
             remap['flow'][0,...] = flow[...,0]
             remap['flow'][1,...] = flow[...,1]
 
+
+            if np.sum(remap['shift']**2) > 20:
+                return False, c_max
+
             ## use shift and flow to align footprints - define reverse mapping
             x_remap,y_remap = build_remap_from_shift_and_flow(self.params['dims'],remap['shift'],remap['flow'] if use_opt_flow else None)
             
@@ -626,14 +617,19 @@ class matching:
         ## find all neuron pairs below a distance threshold
         neighbors = self.data_cross['D_ROIs'][idxes,:] < self.params['neighbor_distance']
 
+        NN_idx = np.zeros((self.data[s_ref]['nA'][0],self.data[s]['nA'][0]),'bool')
         if s!=s_ref:
             ## identifying next-neighbours
             idx_NN = np.nanargmin(self.data_cross['D_ROIs'][self.data[s_ref]['idx_eval'],:],axis=1)
 
-            NN_idx = np.zeros((self.data[s_ref]['nA'][0],self.data[s]['nA'][0]),'bool')
             NN_idx[self.data[s_ref]['idx_eval'],idx_NN] = True
             NN_idx = NN_idx[idxes,:][neighbors]
-            
+        else:
+            np.fill_diagonal(NN_idx,True)
+            # NN_idx[~idxes,:] = False
+            NN_idx = NN_idx[idxes,:][neighbors]
+
+
         ## obtain distance and correlation values of close neighbors, only
         D_ROIs = self.data_cross['D_ROIs'][idxes,:][neighbors]
         fp_corr = self.data_cross['fp_corr'][0,idxes,:][neighbors]
@@ -654,7 +650,8 @@ class matching:
                     idx_vals = idx_dist & idx_fp
 
                     if s==s_ref:  # for self-comparing
-                        self.model['counts_same_unshifted'][i,j] += np.count_nonzero(idx_vals)
+                        self.model['counts_same_unshifted'][i,j] += np.count_nonzero(idx_vals & ~NN_idx)
+
                     else:         # for cross-comparing
                         self.model['counts_unshifted'][i,j,0] += np.count_nonzero(idx_vals)
                         self.model['counts_unshifted'][i,j,1] += np.count_nonzero(idx_vals & NN_idx)
@@ -664,7 +661,8 @@ class matching:
                     idx_fp = (fp_corr_shifted > self.params['arrays']['correlation_bounds'][j]) & (self.params['arrays']['correlation_bounds'][j+1] > fp_corr_shifted)
                     idx_vals = idx_dist & idx_fp
                     if s==s_ref:  # for self-comparing
-                        self.model['counts_same'][i,j] += np.count_nonzero(idx_vals)
+                        # self.model['counts_same'][i,j] += np.count_nonzero(idx_vals)
+                        self.model['counts_same'][i,j] += np.count_nonzero(idx_vals & ~NN_idx)
                     else:         # for cross-comparing
                         self.model['counts'][i,j,0] += np.count_nonzero(idx_vals)
                         self.model['counts'][i,j,1] += np.count_nonzero(idx_vals & NN_idx)
@@ -710,10 +708,54 @@ class matching:
             plt.show(block=False)
 
 
-    def fit_model(self,model='shifted'):
+    def fit_model(self,model='shifted',joint_model='correlation'):
         '''
 
-        '''
+        ''' 
+
+
+        neighbor_dictionary = {
+            'NN':    [],
+            'nNN':   [],
+            'all':   []
+          }
+        
+        self.model = self.model | {            
+            'fit_function': {
+               'single': {
+                  'distance':         copy.deepcopy(neighbor_dictionary),
+                  'correlation':      copy.deepcopy(neighbor_dictionary)
+               },
+               'joint': {
+                  'distance':         copy.deepcopy(neighbor_dictionary),
+                  'correlation':      copy.deepcopy(neighbor_dictionary)
+               }
+              },
+            
+            'fit_parameter': {
+               'single': {
+                  'distance':       copy.deepcopy(neighbor_dictionary),
+                  'correlation':    copy.deepcopy(neighbor_dictionary)
+                  },
+                'joint': {}
+              },
+            
+            'pdf': {
+               'single': {
+                  'distance':       [],
+                  'correlation': []
+                  },
+                'joint': []
+              },
+            
+            'p_same': {
+               'single': {},
+                'joint': []
+              },
+            
+            'f_same':         False,
+          }
+        
         
         count_thr=0
 
@@ -722,117 +764,87 @@ class matching:
             raise Exception('Please specify model to be either "shifted" or "unshifted"')
 
         key_counts = 'counts' if self.params['model']=='shifted' else 'counts_unshifted'
-        counts = self.model[key_counts]
+        counts = self.model[key_counts].astype('float32')
 
         nbins = self.params['nbins']
-        step_dist = self.params['arrays']['distance_step']
-        step_corr = self.params['arrays']['correlation_step']
+        # step_dist = self.params['arrays']['distance_step']
+        # step_corr = self.params['arrays']['correlation_step']
         
         
-
         ## build single models
-        ### distance
-        fit_fun, fit_bounds = self.set_functions('distance','single')
+        for i,key in enumerate(['correlation','distance']):
+            fit_fun, fit_bounds = self.set_functions(key,'single')
 
-        for p,pop in zip((1,2,0),['NN','nNN','all']):
-            p0 = (counts[...,1].sum()/counts[...,0].sum(),) + \
-                tuple(self.model['fit_parameter']['single']['distance']['NN']) + \
-                tuple(self.model['fit_parameter']['single']['distance']['nNN']) if pop=='all' else None
-        
-            self.model['fit_parameter']['single']['distance'][pop] = curve_fit(
-                fit_fun[pop],
-                self.params['arrays']['distance'],
-                counts[...,p].sum(1)/counts[...,p].sum()/step_dist,
-                bounds=fit_bounds[pop],
-                p0=p0
-            )[0]
+            ## obtain fit parameters from fit to count histograms
+            for p,pop in zip((1,2,0),['NN','nNN','all']):
+                p0 = (counts[...,1].sum()/counts[...,0].sum(),) + \
+                    tuple(self.model['fit_parameter']['single'][key]['NN']) + \
+                    tuple(self.model['fit_parameter']['single'][key]['nNN']) if pop=='all' else None
+            
+                self.model['fit_parameter']['single'][key][pop] = curve_fit(
+                    fit_fun[pop],
+                    self.params['arrays'][key],
+                    counts[...,p].sum(i)/counts[...,p].sum()/self.params['arrays'][f'{key}_step'],
+                    bounds=fit_bounds[pop],
+                    p0=p0
+                )[0]
 
-        ## build function
-        d_NN = fun_wrapper(
-            fit_fun['NN'],
-            self.params['arrays']['distance'],
-            self.model['fit_parameter']['single']['distance']['all'][1:3]
-            ) * self.model['fit_parameter']['single']['distance']['all'][0]
-        
-        d_total = fun_wrapper(
-            fit_fun['all'],
-            self.params['arrays']['distance'],
-            self.model['fit_parameter']['single']['distance']['all']
-            )
-        
-        self.model['p_same']['single']['distance'] = d_NN/d_total
+
+            ## build functions for both populations
+            fun_NN = fun_wrapper(
+                fit_fun['NN'],
+                self.params['arrays'][key],
+                self.model['fit_parameter']['single'][key]['all'][1:3]
+                ) * self.model['fit_parameter']['single'][key]['all'][0]
+            
+            fun_total = fun_wrapper(
+                fit_fun['all'],
+                self.params['arrays'][key],
+                self.model['fit_parameter']['single'][key]['all']
+                )
+            
+            ## calculate probability of being the same neuron
+            self.model['p_same']['single'][key] = fun_NN/fun_total
         self.log.warning('does something need to be stored from the parameters / bounds / functions?')
-
-
-        ### to fp-correlation: NN - reverse lognormal, nNN - reverse lognormal
-        fit_fun, fit_bounds = self.set_functions('correlation','single')
-
-        for p,pop in zip((1,2,0),['NN','nNN','all']):
-            p0 = (counts[...,1].sum()/counts[...,0].sum(),) + \
-                tuple(self.model['fit_parameter']['single']['correlation']['NN']) + \
-                tuple(self.model['fit_parameter']['single']['correlation']['nNN']) if pop=='all' else None
-        
-            self.model['fit_parameter']['single']['correlation'][pop] = curve_fit(
-                fit_fun[pop],
-                self.params['arrays']['correlation'],
-                counts[...,p].sum(0)/counts[...,p].sum()/step_corr,
-                bounds=fit_bounds[pop],
-                p0=p0
-            )[0]
-
-        ## build function
-        corr_NN = fun_wrapper(
-            fit_fun['NN'],
-            self.params['arrays']['correlation'],
-            self.model['fit_parameter']['single']['correlation']['all'][1:3]
-            ) * self.model['fit_parameter']['single']['correlation']['all'][0]
-        
-        corr_total = fun_wrapper(
-            fit_fun['all'],
-            self.params['arrays']['correlation'],
-            self.model['fit_parameter']['single']['correlation']['all']
-            )
-        
-        self.model['p_same']['single']['correlation'] = corr_NN/corr_total
-
 
 
 
         ## build joint model
-        # preallocate
-
-        ## define normalized histograms
-        normalized_histogram = counts/counts.sum(0) * nbins/self.params['neighbor_distance']
-        normalized_histogram[np.isnan(normalized_histogram)] = 0
-
-        counts_thr = 20
+        counts_thr = 30
         self.model['fit_parameter']['joint'] = {}
 
+        ## define normalized histograms
         fit_fun, fit_bounds = self.set_functions('distance','joint')
+        normalized_histogram = counts/counts.sum(0,keepdims=True) * nbins/self.params['neighbor_distance']
+        normalized_histogram[np.isnan(normalized_histogram)] = 0
+
         self.model['fit_parameter']['joint']['distance'] = {
-            'NN':np.zeros((self.params['nbins'],len(self.model['fit_parameter']['single']['distance']['NN'])))*np.NaN,
-            'nNN':np.zeros((self.params['nbins'],fit_bounds['nNN'].shape[1]))*np.NaN
+            'NN':np.full((self.params['nbins'],len(self.model['fit_parameter']['single']['distance']['NN'])),np.NaN),
+            'nNN':np.full((self.params['nbins'],fit_bounds['nNN'].shape[1]),np.NaN)
             #'all':np.zeros((self.params['nbins'],len(self.model['fit_parameter']['single']['distance']['all'])))*np.NaN},
             }
         
-        for i in tqdm.tqdm(range(nbins)):
-                for p,pop in zip((1,2),['NN','nNN']):
-                ### to distance distribution: NN - lognormal, nNN - large lognormal?!
-                    if counts[:,i,p].sum() > counts_thr:
-                        self.log.debug('data for %s distance-distribution: '%pop, normalized_histogram[:,i,1])
-                        self.model['fit_parameter']['joint']['distance'][pop][i,:] = curve_fit(
-                            fit_fun[pop],
-                            self.params['arrays']['distance'],
-                            normalized_histogram[:,i,p],
-                            bounds=fit_bounds[pop]
-                        )[0]
+        for i in range(nbins):
+            for p,pop in zip((1,2),['NN','nNN']):
+            ### to distance distribution: NN - lognormal, nNN - large lognormal?!
+                if counts[:,i,p].sum() > counts_thr:
+                    self.log.debug('data for %s distance-distribution: '%pop, normalized_histogram[:,i,1])
+                    self.model['fit_parameter']['joint']['distance'][pop][i,:] = curve_fit(
+                        fit_fun[pop],
+                        self.params['arrays']['distance'],
+                        normalized_histogram[:,i,p],
+                        bounds=fit_bounds[pop]
+                    )[0]
+
+
 
         fit_fun, fit_bounds = self.set_functions('correlation','joint')
-        normalized_histogram = counts/counts.sum(1)[:,np.newaxis,:] * nbins
+        normalized_histogram = counts/counts.sum(1,keepdims=True) * nbins
         normalized_histogram[np.isnan(normalized_histogram)] = 0
+
         self.model['fit_parameter']['joint']['correlation'] = {
-            'NN':np.zeros((self.params['nbins'],len(self.model['fit_parameter']['single']['correlation']['NN'])))*np.NaN,
-            'nNN':np.zeros((self.params['nbins'],fit_bounds['nNN'].shape[1]))*np.NaN
+            'NN':np.full((self.params['nbins'],len(self.model['fit_parameter']['single']['correlation']['NN'])),np.NaN),
+            'nNN':np.full((self.params['nbins'],fit_bounds['nNN'].shape[1]),np.NaN)
             #'all':np.zeros((self.params['nbins'],len(self.model['fit_parameter']['single']['correlation']['all'])))*np.NaN}
             }
 
@@ -850,38 +862,42 @@ class matching:
         #else:
           #self.model['fit_parameter']['joint']['correlation']['NN'][i,:] = 0
 
+        smooth=True
+        if smooth:
+            ## smooth parameter functions
+            for key in ['distance','correlation']:
+                for pop in ['NN','nNN']:#,'all']
+                    #for ax in range(self.model['fit_parameter']['joint'][key][pop].shape(1)):
+                    # print(key,pop)
+                    # print(self.model['fit_parameter']['joint'][key][pop])
+                    self.model['fit_parameter']['joint'][key][pop] = sp.ndimage.median_filter(self.model['fit_parameter']['joint'][key][pop],[5,1])
+                    self.model['fit_parameter']['joint'][key][pop] = sp.ndimage.gaussian_filter(self.model['fit_parameter']['joint'][key][pop],[1,0])
+                    # print(self.model['fit_parameter']['joint'][key][pop])
 
-        ## smooth parameter functions
-        for key in ['distance','correlation']:
-            for pop in ['NN','nNN']:#,'all']
-                #for ax in range(self.model['fit_parameter']['joint'][key][pop].shape(1)):
-                self.model['fit_parameter']['joint'][key][pop] = sp.ndimage.median_filter(self.model['fit_parameter']['joint'][key][pop],[5,1])
-                self.model['fit_parameter']['joint'][key][pop] = sp.ndimage.gaussian_filter(self.model['fit_parameter']['joint'][key][pop],[1,0])
+                    for ax in range(self.model['fit_parameter']['joint'][key][pop].shape[1]):
+                        ## find first/last index, at which parameter has a non-nan value
+                        nan_idx = np.isnan(self.model['fit_parameter']['joint'][key][pop][:,ax])
+                        
+                        if nan_idx[0] and (~nan_idx).sum()>1:  ## interpolate beginning
+                            idx = np.where(~nan_idx)[0][:20]
+                            y_arr = self.model['fit_parameter']['joint'][key][pop][idx,ax]
+                            f_interp = np.polyfit(self.params['arrays'][key][idx],y_arr,1)
+                            poly_fun = np.poly1d(f_interp)
 
-                for ax in range(self.model['fit_parameter']['joint'][key][pop].shape[1]):
-                    ## find first/last index, at which parameter has a non-nan value
-                    nan_idx = np.isnan(self.model['fit_parameter']['joint'][key][pop][:,ax])
-                    
-                    if nan_idx[0] and (~nan_idx).sum()>1:  ## interpolate beginning
-                        idx = np.where(~nan_idx)[0][:20]
-                        y_arr = self.model['fit_parameter']['joint'][key][pop][idx,ax]
-                        f_interp = np.polyfit(self.params['arrays'][key][idx],y_arr,1)
-                        poly_fun = np.poly1d(f_interp)
+                            self.model['fit_parameter']['joint'][key][pop][:idx[0],ax] = poly_fun(self.params['arrays'][key][:idx[0]])
+                        
+                        if nan_idx[-1] and (~nan_idx).sum()>1:  ## interpolate end
+                            idx = np.where(~nan_idx)[0][-20:]
+                            y_arr = self.model['fit_parameter']['joint'][key][pop][idx,ax]
+                            f_interp = np.polyfit(self.params['arrays'][key][idx],y_arr,1)
+                            poly_fun = np.poly1d(f_interp)
 
-                        self.model['fit_parameter']['joint'][key][pop][:idx[0],ax] = poly_fun(self.params['arrays'][key][:idx[0]])
-                    
-                    if nan_idx[-1] and (~nan_idx).sum()>1:  ## interpolate end
-                        idx = np.where(~nan_idx)[0][-20:]
-                        y_arr = self.model['fit_parameter']['joint'][key][pop][idx,ax]
-                        f_interp = np.polyfit(self.params['arrays'][key][idx],y_arr,1)
-                        poly_fun = np.poly1d(f_interp)
-
-                        self.model['fit_parameter']['joint'][key][pop][idx[-1]+1:,ax] = poly_fun(self.params['arrays'][key][idx[-1]+1:])
+                            self.model['fit_parameter']['joint'][key][pop][idx[-1]+1:,ax] = poly_fun(self.params['arrays'][key][idx[-1]+1:])
 
 
         ## define probability density functions
-        # joint_model = 'correlation'
-        joint_model = 'distance'
+        # 'joint model' defines the single model functions which are used to calculate the joint model, 
+        # while the 'weight model' merely specifies the weighting between NN and nNN functions 
         weight_model = 'distance' if joint_model=='correlation' else 'correlation'
 
         fit_fun, fit_bounds = self.set_functions(joint_model,'joint') # could also be distance
@@ -904,7 +920,6 @@ class matching:
                     else:
                         self.model['pdf']['joint'][p,:,n] = f_pop*weight
 
-      
         ## obtain probability of being same neuron
         self.model['p_same']['joint'] = 1-self.model['pdf']['joint'][1,...]/np.nansum(self.model['pdf']['joint'],0)
         # if count_thr > 0:
@@ -912,6 +927,7 @@ class matching:
         # sp.ndimage.filters.gaussian_filter(self.model['p_same']['joint'],2,output=self.model['p_same']['joint'])
         self.create_model_evaluation()
         self.status['model_calculated'] = True
+        return self.model['pdf']['joint']
 
 
     def create_model_evaluation(self):
@@ -927,6 +943,8 @@ class matching:
           REMARK:
             * A more flexible approach with functions to be defined on class creation could be feasible, but makes everything a lot more complex for only minor pay-off. Could be implemented in future changes.
         '''
+
+        # print(functions)
         
         fit_fun = {}
         fit_bounds = {}
@@ -943,13 +961,18 @@ class matching:
                 fit_fun['nNN'] = functions['linear_sigmoid']
                 fit_bounds['nNN'] = np.array([(0,np.inf),(0,np.inf),(0,self.params['neighbor_distance']/2)]).T
 
-                fit_fun['all'] = lambda x,p,sigma,mu,m,sig_slope,sig_center : p*functions['lognorm'](x,sigma,mu) + (1-p)*functions['linear_sigmoid'](x,m,sig_slope,sig_center)
+                fit_fun['all'] = lambda x,p,sigma,mu,m,sig_slope,sig_center : p*fit_fun['NN'](x,sigma,mu) + (1-p)*fit_fun['nNN'](x,m,sig_slope,sig_center)
 
             elif model=='joint':           
-                fit_fun['nNN'] = functions['gauss']
-                fit_bounds['nNN'] = np.array([(0,np.inf),(-np.inf,np.inf)]).T
+                fit_fun['nNN'] = functions['linear_sigmoid']
+                fit_bounds['nNN'] = np.array([(0,np.inf),(0,np.inf),(0,self.params['neighbor_distance']/2)]).T
+                # fit_fun['nNN'] = functions['gauss']
+                # fit_fun['nNN'] = functions['skewed_gauss']
+                # fit_bounds['nNN'] = np.array([(0,np.inf),(-np.inf,np.inf)]).T
                 # fit_fun['nNN'] = functions['linear_sigmoid']
                 # fit_bounds['nNN'] = np.array([(0,np.inf),(0,np.inf),(0,self.params['neighbor_distance']/2)]).T
+                fit_fun['all'] = lambda x,p,sigma,mu,m,sig_slope,sig_center : p*fit_fun['NN'](x,sigma,mu) + (1-p)*fit_fun['nNN'](x,m,sig_slope,sig_center)
+                # fit_fun['all'] = lambda x,p,sigma1,mu1,sigma2,mu2 : p*fit_fun['NN'](x,sigma1,mu1) + (1-p)*fit_fun['nNN'](x,sigma2,mu2)
             
             ## set bounds for fit-parameters
             fit_bounds['all'] = np.hstack([bounds_p,fit_bounds['NN'],fit_bounds['nNN']])
@@ -964,19 +987,22 @@ class matching:
 
                 if self.params['model'] == 'shifted':
                     fit_fun['nNN'] = functions['gauss']
-                    fit_bounds['nNN'] = np.array([(0,np.inf),(-np.inf,np.inf)]).T
+                    # fit_fun['nNN'] = functions['skewed_gauss']
+                    fit_bounds['nNN'] = np.array([(0,np.inf),(0,1)]).T
                     
-                    fit_fun['all'] = lambda x,p,sigma1,mu1,sigma2,mu2 : p*functions['lognorm_reverse'](x,sigma1,mu1) + (1-p)*functions['gauss'](x,sigma2,mu2)
+                    fit_fun['all'] = lambda x,p,sigma1,mu1,sigma2,mu2 : p*fit_fun['NN'](x,sigma1,mu1) + (1-p)*fit_fun['nNN'](x,sigma2,mu2)
 
                 else:
                     fit_fun['nNN'] = functions['beta']
                     fit_bounds['nNN'] = np.array([(-np.inf,np.inf),(-np.inf,np.inf)]).T
 
-                    fit_fun['all'] = lambda x,p,sigma1,mu1,a,b : p*functions['lognorm_reverse'](x,sigma1,mu1) + (1-p)*functions['beta'](x,a,b)
+                    fit_fun['all'] = lambda x,p,sigma1,mu1,a,b : p*fit_fun['NN'](x,sigma1,mu1) + (1-p)*fit_fun['nNN'](x,a,b)
             
             elif model=='joint':
                 fit_fun['nNN'] = functions['gauss']
+                # fit_fun['nNN'] = functions['skewed_gauss']
                 fit_bounds['nNN'] = np.array([(0,np.inf),(-np.inf,np.inf)]).T
+                fit_fun['all'] = lambda x,p,sigma1,mu1,sigma2,mu2 : p*fit_fun['NN'](x,sigma1,mu1) + (1-p)*fit_fun['nNN'](x,sigma2,mu2)
 
             ## set bounds for fit-parameters
             fit_bounds['all'] = np.hstack([bounds_p,fit_bounds['NN'],fit_bounds['nNN']])
@@ -1277,9 +1303,9 @@ class matching:
       plt.setp(ax[2][1],xlim=self.params['arrays']['correlation'][[0,-1]],ylim=self.params['arrays']['distance'][[0,-1]])
 
       slider_h = 0.02
-      slider_w = 0.35
-      axamp_dist = plt.axes([0.05, .8, slider_w, slider_h])
-      axamp_corr = plt.axes([0.05, .65, slider_w, slider_h])
+      slider_w = 0.3
+      axamp_dist = plt.axes([0.1, .8, slider_w, slider_h])
+      axamp_corr = plt.axes([0.1, .65, slider_w, slider_h])
 
       
       # widget = {}

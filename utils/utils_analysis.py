@@ -6,7 +6,7 @@ from .utils import calculate_img_correlation, center_of_mass
 
 def calculate_statistics(A,A_ref=None,idx_eval=None,idx_eval_ref=None,
             SNR_comp=None,C=None,
-            binary='half',neighbor_distance=12,model='shifted',dims=(512,512)):
+            binary='half',neighbor_distance=12,convert=1.,model='shifted',dims=(512,512)):
     '''
         function to calculate footprint correlations used for the matching procedure for 
           - nearest neighbour (NN) - closest center of mass to reference footprint
@@ -33,8 +33,8 @@ def calculate_statistics(A,A_ref=None,idx_eval=None,idx_eval_ref=None,
     if idx_eval_ref is None:
         idx_eval_ref = idx_eval if same else np.array(A_ref.sum(0)>0).ravel()
     
-    cm = center_of_mass(A,*dims)
-    cm_ref = center_of_mass(A_ref,*dims)
+    cm = center_of_mass(A,*dims,convert=convert)
+    cm_ref = center_of_mass(A_ref,*dims,convert=convert)
     # calculate distance between footprints and identify NN
     com_distance = sp.spatial.distance.cdist(cm_ref,cm)
 
