@@ -294,6 +294,27 @@ def normalize_sparse_array(A,relative_threshold=0.001,minimum_nonzero_entries=50
     ]).T
 
 
+def nangauss_filter(X,sigma=None,mode='nearest',truncate=2):
+  if (sigma is None) or not np.any(np.array(sigma)>0):
+    return X
+  else:
+    V = X.copy()
+    V[np.isnan(X)] = 0
+    VV = sp.ndimage.gaussian_filter(V,sigma,truncate=truncate,mode=mode)
+
+    W = 0*X.copy()+1
+    W[np.isnan(X)] = 0
+    WW = sp.ndimage.gaussian_filter(W,sigma,truncate=truncate,mode=mode)
+
+  return VV/WW
+
+
+
+def nanmedian_filter(X,footprint=None,mode='nearest'):
+   
+   return sp.ndimage.generic_filter(X,np.nanmedian,footprint=footprint,mode=mode)
+
+
 def fun_wrapper(fun,x,p):
     '''
       

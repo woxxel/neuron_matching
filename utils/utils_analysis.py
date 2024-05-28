@@ -97,7 +97,7 @@ def calculate_p(d_ROIs,fp_corr,p_model,neighbor_distance=12):
     # print(neighbor_distance)
     neighbors = d_ROIs < neighbor_distance
     p_same = np.zeros_like(d_ROIs)
-    p_same[neighbors] = p_model.ev(d_ROIs[neighbors],fp_corr[neighbors])
+    p_same[neighbors] = p_model(d_ROIs[neighbors],fp_corr[neighbors])
     
     p_same[np.isnan(p_same)] = 0        # fill "bad" entries with zeros
     p_same = np.clip(p_same,0,1)        # function-shapes may allow for values exceeding [0,1]
