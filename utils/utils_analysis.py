@@ -54,10 +54,10 @@ def calculate_statistics(A,A_ref=None,idx_eval=None,idx_eval_ref=None,
                 if idx_eval[j]:
                     ## calculate pairwise correlation between reference and current set of neuron footprints
                     # if (model=='both') | (model=='unshifted'):
-                    footprint_correlation[0,i,j],_ = calculate_img_correlation(A[:,j],A_ref[:,i],shift=False)
+                    footprint_correlation[0,i,j],_,_ = calculate_img_correlation(A[:,j],A_ref[:,i],shift=False)
 
                     if (model=='both') | (model=='shifted'):
-                        footprint_correlation[1,i,j],_ = calculate_img_correlation(A[:,j],A_ref[:,i],crop=True,shift=True,binary=binary)
+                        footprint_correlation[1,i,j],_,_ = calculate_img_correlation(A[:,j],A_ref[:,i],crop=True,shift=True,binary=binary)
 
                         # tag footprints for removal when calculating statistics for self-matching and they pass some criteria:
                         # 1) significant overlap with closeby neuron ("contestant")

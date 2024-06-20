@@ -26,6 +26,9 @@ matching_params = {
     'cnn_lowest': 0.1,
 
     'min_session_correlation':   0.1,        # minimum value of correlation between session footprints to include data in matching
+    'min_session_correlation_zscore':   3.,        # minimum value of correlation between session footprints to include data in matching
+
+    'max_session_shift': 50,        # maximum shift between sessions to consider for matching
 }
 
 # class matchingParams:

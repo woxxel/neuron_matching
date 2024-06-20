@@ -204,71 +204,52 @@ class matching:
 
         self.nS = len(self.paths['sessions'])
         self.progress = tqdm.tqdm(enumerate(self.paths['sessions']),total=self.nS)
+        # print(self.paths['sessions'])
+
+        has_reference = False
 
         # s_ref = 0
         for (s,self.currentPath) in self.progress:
-            self.log.debug(f'now processing session {self.currentPath}')
             self.data[s] = copy.deepcopy(self.data_blueprint)
             self.data[s]['filePath'] = self.currentPath
             self.data[s]['skipped'] = False
 
-            self.A = self.load_footprints(self.currentPath,s,store_data=True)
+            self.A = self.load_footprints(self.currentPath,s)
             
             if isinstance(self.A,bool): 
                 self.data[s]['skipped'] = True
                 continue
+            
+            self.progress.set_description(f'Aligning data from {self.currentPath}')
+            
+            ## prepare (and align) footprints
+            prepared,self.data[s]['remap'] = self.prepare_footprints(align_to_reference=has_reference)
+            self.calculate_footprint_data(s)
 
-            if not (self.A is None):
-                
-                self.progress.set_description('Aligning data from %s'%self.currentPath)
-                
-                ## prepare (and align) footprints
-                prepared,out_para = self.prepare_footprints(align_to_reference=s>0 and hasattr(self,'A_ref'))
-                if not prepared: 
-                    # print('skipping %s (image correlation %.2d too low)'%(self.currentPath,out_para))
-                    self.data[s]['skipped'] = True
-                    continue
-                # self.data[s]['remap'] = out_para
-                
-                ## calculating various statistics
-                self.data[s]['idx_eval'] &= (np.diff(self.A.indptr) != 0) ## finding non-empty rows in sparse array (https://mike.place/2015/sparse/)
+            if not prepared: 
+                self.data[s]['skipped'] = True
+                continue
 
-                # print('\n idx evals:',self.data[s]['idx_eval'].sum())
-                self.data[s]['nA'][0] = self.A.shape[1]    # number of neurons
-                self.data[s]['cm'] = center_of_mass(self.A,self.params['dims'][0],self.params['dims'][1],convert=self.params['pxtomu'])
+            if self.params['use_kde']:
+                # self.progress.set_description('Calculate kernel density for Session %d'%s0)
+                self.position_kde(s)         # build kernel
 
-                self.progress.set_description('Calculate self-referencing statistics for %s'%self.currentPath)
+            self.update_joint_model(s,s)
 
-                ## find and mark potential duplicates of neuron footprints in session
-                self.data_cross['D_ROIs'],self.data_cross['fp_corr'], idx_remove = calculate_statistics(
-                   self.A,idx_eval=self.data[s]['idx_eval'],
-                   SNR_comp=self.data[s]['SNR_comp'],C=self.data_tmp['C'],
-                   binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance'],convert=self.params['pxtomu'],model=self.params['correlation_model'],
-                   dims=self.params['dims']
-                )
-                # print('\n idx remove:',idx_remove)
-                self.data[s]['idx_eval'][idx_remove] = False
-                self.data[s]['nA'][1] = self.data[s]['idx_eval'].sum()
+            if has_reference:
+                self.progress.set_description('Calculate cross-statistics for %s'%self.currentPath)
+                self.data_cross['D_ROIs'],self.data_cross['fp_corr'],_ = calculate_statistics(
+                    self.A,A_ref=self.A_ref,idx_eval=self.data[s]['idx_eval'],idx_eval_ref=self.data[s_ref]['idx_eval'],
+                    binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance'],convert=self.params['pxtomu'],model=self.params['correlation_model'],
+                    dims=self.params['dims']
+                )        # calculating distances and footprint correlations
+                self.progress.set_description('Update model with data from %s'%self.currentPath)
+                self.update_joint_model(s,s_ref)
 
-                if self.params['use_kde']:
-                    # self.progress.set_description('Calculate kernel density for Session %d'%s0)
-                    self.position_kde(s)         # build kernel
-
-                self.update_joint_model(s,s)
-
-                if s>0 and hasattr(self,'A_ref'):
-                    self.progress.set_description('Calculate cross-statistics for %s'%self.currentPath)
-                    self.data_cross['D_ROIs'],self.data_cross['fp_corr'],_ = calculate_statistics(
-                        self.A,A_ref=self.A_ref,idx_eval=self.data[s]['idx_eval'],idx_eval_ref=self.data[s_ref]['idx_eval'],
-                        binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance'],convert=self.params['pxtomu'],model=self.params['correlation_model'],
-                        dims=self.params['dims']
-                    )        # calculating distances and footprint correlations
-                    self.progress.set_description('Update model with data from %s'%self.currentPath)
-                    self.update_joint_model(s,s_ref)
-
-                self.A_ref = self.A.copy()
-                self.Cn_ref = self.data_tmp['Cn']
-                s_ref = s
+            self.A_ref = self.A.copy()
+            self.Cn_ref = self.data_tmp['Cn']
+            s_ref = s
+            has_reference = True
 
         self.dynamic_fit()
         
@@ -299,6 +280,8 @@ class matching:
         
         self.nS = len(self.paths['sessions'])
 
+        self.data = {}
+
 
         # if not self.model['f_same']:
         assert self.status['model_calculated'], 'Model not yet created - please run build_model first'
@@ -306,17 +289,22 @@ class matching:
         ## load and prepare first set of footprints
         s=0
         while True:
+            self.data[s] = copy.deepcopy(self.data_blueprint)
+            self.data[s]['filePath'] = self.paths['sessions'][s]
+            self.data[s]['skipped'] = False
+
             self.A = self.load_footprints(self.paths['sessions'][s],s)
             if isinstance(self.A,bool):
-                # self.data[s]['skipped'] = True
+                self.data[s]['skipped'] = True
                 s += 1
                 continue
             else:
-                # self.data[s]['skipped'] = False
                 break
-        self.progress = tqdm.tqdm(zip(range(s+1,self.nS),self.paths['sessions'][s+1:]),total=self.nS-1,leave=True)
+        self.progress = tqdm.tqdm(enumerate(self.paths['sessions'][s+1:],start=s+1),total=self.nS-(s+1),leave=True)
         
         self.prepare_footprints(align_to_reference=False)
+        self.calculate_footprint_data(s)
+        
         self.Cn_ref = self.data_tmp['Cn']
         self.A_ref = self.A[:,self.data[s]['idx_eval']]
         self.A0 = self.A.copy()   ## store initial footprints for common reference
@@ -337,127 +325,136 @@ class matching:
         self.results['p_matched'][:,0,0] = 1
 
         for (s,self.currentPath) in self.progress:
-            # self.data[s]['skipped'] = False
+            session_name = os.path.dirname(self.paths['sessions'][s]).split('/')[-1]
+            self.data[s] = copy.deepcopy(self.data_blueprint)
+            self.data[s]['filePath'] = self.currentPath
+            self.data[s]['skipped'] = False
+
             self.A = self.load_footprints(self.currentPath,s)
 
-
-            if isinstance(self.A,bool) or self.data[s]['skipped']: 
-                # self.data[s]['skipped'] = True
+            if isinstance(self.A,bool):
+                self.data[s]['skipped'] = True
                 continue
-
+                
             for s0 in range(s):
                 # self.progress.set_description('Calculate image correlations for Session %d'%s)
-                if 'Cn' in self.data[s0].keys():
-                    c_max,_ = calculate_img_correlation(self.data[s0]['Cn'],self.data[s]['Cn'],plot_bool=False)
-                    self.results['Cn_corr'][s0,s] = self.results['Cn_corr'][s,s0] = c_max
+                if ('Cn' in self.data[s0].keys()) and ('Cn' in self.data[s].keys()):
+                    c_max,_,_ = calculate_img_correlation(self.data[s0]['Cn'],self.data[s]['Cn'],plot_bool=False)
+                    self.results['Cn_corr'][s0,s] = self.results['Cn_corr'][s,s0] = c_max      
+            
+            self.progress.set_description(f"A union size: {self.data['joint']['nA'][0]}, Preparing footprints from {session_name}")
+
+            ## preparing data of current session
+            prepared,self.data[s]['remap'] = self.prepare_footprints(A_ref=self.A0)
+            self.calculate_footprint_data(s)
+
+            if not prepared:
+                self.data[s]['skipped'] = True
+                continue
+
+
+            ## calculate matching probability between each pair of neurons 
+            self.progress.set_description(f"A union size: {self.data['joint']['nA'][0]}, Calculate statistics for {session_name}")
+            self.data_cross['D_ROIs'],self.data_cross['fp_corr'],_ = calculate_statistics(
+                self.A,A_ref=self.A_ref,idx_eval=self.data[s]['idx_eval'],idx_eval_ref=self.data['joint']['idx_eval'],
+                binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance'],convert=self.params['pxtomu'],model=self.params['correlation_model'],
+                dims=self.params['dims']
+            )
+
+            idx_fp = 1 if self.params['correlation_model'] == 'shifted' else 0
+            self.data[s]['p_same'] = calculate_p(
+                self.data_cross['D_ROIs'],self.data_cross['fp_corr'][idx_fp,...],
+                self.model['f_same'],self.params['neighbor_distance']
+            )
+
+
+            ## run hungarian algorithm (HA) with (1-p_same) as score
+            self.progress.set_description(f"A union size: {self.data['joint']['nA'][0]}, Perform Hungarian matching on {session_name}")
+            matches = linear_sum_assignment(1 - self.data[s]['p_same'].toarray())
+            p_matched = self.data[s]['p_same'].toarray()[matches]
+            
+            idx_TP = np.where(p_matched > p_thr[0])[0] ## thresholding results (HA matches all pairs, but we only want matches above p_thr)
+            if len(idx_TP) > 0:
+                matched_ref = matches[0][idx_TP]    # matched neurons in s_ref
+                matched = matches[1][idx_TP]        # matched neurons in s
+                # print(idx_TP,matched_ref)
+            else:
+                matched_ref = np.array([],'int')
+                matched = np.array([],'int')
+            
+
+            ## find neurons which were not matched in current and reference session
+            non_matched_ref = np.setdiff1d(list(range(self.data['joint']['nA'][0])), matched_ref)
+            non_matched = np.setdiff1d(list(np.where(self.data[s]['idx_eval'])[0]), matches[1][idx_TP])
+            non_matched = non_matched[self.data[s]['idx_eval'][non_matched]]
+
+            # print(matched,non_matched)
+            ## calculate number of matches found
+            TP = np.sum(p_matched > p_thr[0]).astype('float32')
+            self.A_ref = self.A_ref.tolil()
+            
+            ## update footprint shapes of matched neurons with A_ref = (1-p/2)*A_ref + p/2*A to maintain part or all of original shape, depending on p_matched
+            self.A_ref[:,matched_ref] = self.A_ref[:,matched_ref].multiply(1-p_matched[idx_TP]/2) + self.A[:,matched].multiply(p_matched[idx_TP]/2)
+
+            ## removing footprints from the data which were competing with another one 
+            ## to be matched and lost, but have significant probability to be the same
+            ## this step ensures, that downstream session don't confuse this one and the
+            ## 'winner', leading to arbitrary assignments between two clusters
+            for nm in non_matched:
+                p_all = self.data[s]['p_same'][:,nm].todense()
+                if np.any(p_all>p_thr[1]):
+                #    print(f'!! neuron {nm} is removed, as it is nonmatched and has high match probability:',p_all)[p_all>0])
+                #    print(np.where(p_all>0))
+                    non_matched = non_matched[non_matched!=nm]
 
             
-            if not (self.A is None):
-                
-                self.progress.set_description('A union size: %d, Preparing footprints from Session #%d'%(self.data['joint']['nA'][0],s))
+            ## append new neuron footprints to union
+            self.A_ref = sp.sparse.hstack([self.A_ref, self.A[:,non_matched]]).asformat('csc')
 
-                ## preparing data of current session
-                prepared,out_para = self.prepare_footprints(A_ref=self.A0)
-                if not prepared: 
-                    # self.data[s]['skipped'] = True
-                    continue
-                
-                self.data[s]['remap'] = out_para
-                self.data[s]['cm'] = center_of_mass(self.A,self.params['dims'][0],self.params['dims'][1],convert=self.params['pxtomu'])
-                
+            ## update union data
+            self.data['joint']['nA'][0] = self.A_ref.shape[1]
+            self.data['joint']['idx_eval'] = np.ones(self.data['joint']['nA'][0],'bool')
+            self.data['joint']['cm'] = center_of_mass(self.A_ref,self.params['dims'][0],self.params['dims'][1],convert=self.params['pxtomu'])
 
-                ## calculate matching probability between each pair of neurons 
-                self.progress.set_description('A union size: %d, Calculate statistics for Session #%d'%(self.data['joint']['nA'][0],s))
-                self.data_cross['D_ROIs'],self.data_cross['fp_corr'],_ = calculate_statistics(
-                    self.A,A_ref=self.A_ref,idx_eval=self.data[s]['idx_eval'],idx_eval_ref=self.data['joint']['idx_eval'],
-                    binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance'],convert=self.params['pxtomu'],model=self.params['correlation_model'],
-                    dims=self.params['dims']
-                )
+            
+            ## write neuron indices of neurons from this session
+            self.results['assignments'][matched_ref,s] = matched   # ... matched neurons are added
 
-                idx_fp = 1 if self.params['correlation_model'] == 'shifted' else 0
-                self.data[s]['p_same'] = calculate_p(self.data_cross['D_ROIs'],self.data_cross['fp_corr'][idx_fp,...],
-                            self.model['f_same'],self.params['neighbor_distance'])
+            ## ... and non-matched (new) neurons are appended 
+            N_add = len(non_matched)
+            match_add = np.zeros((N_add,self.nS))*np.NaN
+            match_add[:,s] = non_matched
+            self.results['assignments'] = np.concatenate([self.results['assignments'],match_add],axis=0)
 
+            ## write match probabilities to matched neurons and reshape array to new neuron number
+            self.results['p_matched'][matched_ref,s,0] = p_matched[idx_TP]
 
-                ## run hungarian algorithm (HA) with (1-p_same) as score
-                self.progress.set_description('A union size: %d, Perform Hungarian matching on Session #%d'%(self.data['joint']['nA'][0],s))
-                matches = linear_sum_assignment(1 - self.data[s]['p_same'].toarray())
-                p_matched = self.data[s]['p_same'].toarray()[matches]
-                
-                idx_TP = np.where(p_matched > p_thr[0])[0] ## thresholding results (HA matches all pairs, but we only want matches above p_thr)
-                if len(idx_TP) > 0:
-                    matched_ref = matches[0][idx_TP]    # matched neurons in s_ref
-                    matched = matches[1][idx_TP]        # matched neurons in s
-                    # print(idx_TP,matched_ref)
-                else:
-                    matched_ref = np.array([],'int')
-                    matched = np.array([],'int')
-                
+            ## write best non-matching probability
+            p_all = self.data[s]['p_same'].toarray()
+            self.results['p_matched'][matched_ref,s,1] = [max(p_all[c,np.where(p_all[c,:]!=self.results['p_matched'][c,s,0])[0]]) for c in matched_ref]
+            # self.results['p_matched'][non_matched,s,1] = [max(p_all[c,np.where(p_all[c,:]!=self.results['p_matched'][c,s,0])[0]]) for c in matched_ref]
 
-                ## find neurons which were not matched in current and reference session
-                non_matched_ref = np.setdiff1d(list(range(self.data['joint']['nA'][0])), matched_ref)
-                non_matched = np.setdiff1d(list(np.where(self.data[s]['idx_eval'])[0]), matches[1][idx_TP])
-                non_matched = non_matched[self.data[s]['idx_eval'][non_matched]]
+            
+            p_same_add = np.full((N_add,self.nS,2),np.NaN)
+            p_same_add[:,s,0] = 1
+            
+            self.results['p_matched'] = np.concatenate([self.results['p_matched'],p_same_add],axis=0)
 
-                # print(matched,non_matched)
-                ## calculate number of matches found
-                TP = np.sum(p_matched > p_thr[0]).astype('float32')
-                self.A_ref = self.A_ref.tolil()
-                
-                ## update footprint shapes of matched neurons with A_ref = (1-p/2)*A_ref + p/2*A to maintain part or all of original shape, depending on p_matched
-                self.A_ref[:,matched_ref] = self.A_ref[:,matched_ref].multiply(1-p_matched[idx_TP]/2) + self.A[:,matched].multiply(p_matched[idx_TP]/2)
-
-                ## removing footprints from the data which were competing with another one 
-                ## to be matched and lost, but have significant probability to be the same
-                ## this step ensures, that downstream session don't confuse this one and the
-                ## 'winner', leading to arbitrary assignments between two clusters
-                for nm in non_matched:
-                    p_all = self.data[s]['p_same'][:,nm].todense()
-                    if np.any(p_all>p_thr[1]):
-                    #    print(f'!! neuron {nm} is removed, as it is nonmatched and has high match probability:',p_all)[p_all>0])
-                    #    print(np.where(p_all>0))
-                        non_matched = non_matched[non_matched!=nm]
-
-                
-                ## append new neuron footprints to union
-                self.A_ref = sp.sparse.hstack([self.A_ref, self.A[:,non_matched]]).asformat('csc')
-
-                ## update union data
-                self.data['joint']['nA'][0] = self.A_ref.shape[1]
-                self.data['joint']['idx_eval'] = np.ones(self.data['joint']['nA'][0],'bool')
-                self.data['joint']['cm'] = center_of_mass(self.A_ref,self.params['dims'][0],self.params['dims'][1],convert=self.params['pxtomu'])
-
-                
-                ## write neuron indices of neurons from this session
-                self.results['assignments'][matched_ref,s] = matched   # ... matched neurons are added
-
-                ## ... and non-matched (new) neurons are appended 
-                N_add = len(non_matched)
-                match_add = np.zeros((N_add,self.nS))*np.NaN
-                match_add[:,s] = non_matched
-                self.results['assignments'] = np.concatenate([self.results['assignments'],match_add],axis=0)
-
-                ## write match probabilities to matched neurons and reshape array to new neuron number
-                self.results['p_matched'][matched_ref,s,0] = p_matched[idx_TP]
-
-                ## write best non-matching probability
-                p_all = self.data[s]['p_same'].toarray()
-                self.results['p_matched'][matched_ref,s,1] = [max(p_all[c,np.where(p_all[c,:]!=self.results['p_matched'][c,s,0])[0]]) for c in matched_ref]
-                # self.results['p_matched'][non_matched,s,1] = [max(p_all[c,np.where(p_all[c,:]!=self.results['p_matched'][c,s,0])[0]]) for c in matched_ref]
-
-                
-                p_same_add = np.full((N_add,self.nS,2),np.NaN)
-                p_same_add[:,s,0] = 1
-                
-                self.results['p_matched'] = np.concatenate([self.results['p_matched'],p_same_add],axis=0)
-
-                # if np.any(np.all(self.results['p_matched']>0.9,axis=2)):
-                #     print('double match!')
-                #     return
+            # if np.any(np.all(self.results['p_matched']>0.9,axis=2)):
+            #     print('double match!')
+            #     return
 
 
         ## some post-processing to create cluster-structures values / statistics
+        self.store_results()
 
+        # finally, save results
+        if save_results:
+            self.save_registration(suffix=self.paths['suffix'])
+            self.save_data(suffix=self.paths['suffix'])
+
+
+    def store_results(self):
         self.results['cm'] = np.zeros(self.results['assignments'].shape + (2,)) * np.NaN
         for key in ['SNR_comp','r_values','cnn_preds']:
             self.results[key] = np.zeros_like(self.results['assignments'])
@@ -467,6 +464,7 @@ class matching:
             'shift': np.zeros((self.nS,2)),
             'transposed': np.zeros(self.nS,'bool'),
             'corr': np.zeros(self.nS),
+            'corr_zscored': np.zeros(self.nS),
         }
         self.results['filePath'] = ['']*self.nS
 
@@ -478,6 +476,7 @@ class matching:
                 self.results['remap']['transposed'][s] = self.data[s]['remap']['transposed'] if has_reference else False
                 self.results['remap']['shift'][s,:] = self.data[s]['remap']['shift'] if has_reference else [0,0]
                 self.results['remap']['corr'][s] = self.data[s]['remap']['c_max'] if has_reference else 1
+                self.results['remap']['corr_zscored'][s] = self.data[s]['remap']['c_zscored'] if has_reference else 1
 
             self.results['filePath'][s] = self.data[s]['filePath']
             
@@ -491,13 +490,9 @@ class matching:
                     pass
             
             has_reference = True
-        # finally, save results
-        if save_results:
-            self.save_registration(suffix=self.paths['suffix'])
-            self.save_data(suffix=self.paths['suffix'])
 
 
-    def load_footprints(self,loadPath,s=None,store_data=False):
+    def load_footprints(self,loadPath,s=None):
         '''
           function to load results from neuron detection (CaImAn, OnACID) and store in according dictionaries
 
@@ -515,6 +510,7 @@ class matching:
             else:
                 self.log.error('File extension not yet implemented for loading data!')
                 return False
+            
             if 'Cn' in ld.keys():
                 Cn = ld['Cn'].T
             else:
@@ -527,14 +523,14 @@ class matching:
             
             ## load some data necessary for further processing
             self.data_tmp['C'] = ld['C']
-            if store_data & np.all([key in ld.keys() for key in ['SNR_comp','r_values','cnn_preds']]):
+            if np.all([key in ld.keys() for key in ['SNR_comp','r_values','cnn_preds']]):
                 ## if evaluation parameters are present, use them to define used neurons
                 for key in ['SNR_comp','r_values','cnn_preds']:
                     self.data[s][key] = ld[key]
 
                 ## threshold neurons according to evaluation parameters
                 self.data[s]['idx_eval'] = ((ld['SNR_comp']>self.params['SNR_lowest']) & (ld['r_values']>self.params['rval_lowest']) & (ld['cnn_preds']>self.params['cnn_lowest'])) & ((ld['SNR_comp']>self.params['min_SNR']) | (ld['r_values']>self.params['rval_thr']) | (ld['cnn_preds']>self.params['min_cnn_thr']))
-            elif store_data:
+            else:
                 ## else, use all neurons
                 self.data[s]['idx_eval'] = np.ones(ld['A'].shape[1],'bool')
 
@@ -556,7 +552,7 @@ class matching:
             self.A = sp.sparse.csc_matrix(self.A)
         
         remap = {
-           'shift':     np.zeros((2,)),
+           'shift':     np.full((2,),np.NaN),
            'flow':      np.zeros((2,)+self.params['dims']),
            'c_max':     None,
            'transposed':False,
@@ -578,19 +574,22 @@ class matching:
             # Cn_ref = np.array(A_ref.sum(1).reshape(512,512))
             Cn = self.data_tmp['Cn']
             Cn_ref = self.Cn_ref
-            c_max,_ = calculate_img_correlation(Cn_ref,Cn,plot_bool=False)
-            c_max_T,_ = calculate_img_correlation(Cn_ref,Cn.T,plot_bool=False)
+            c_max,c_zscored,_ = calculate_img_correlation(Cn_ref,Cn,plot_bool=False)
+            c_max_T,c_zscored_T,_ = calculate_img_correlation(Cn_ref,Cn.T,plot_bool=False)
+            # print('z scores:',c_zscored,c_zscored_T)
+            remap['c_max'] = c_max
 
             ##  if no good alignment is found, don't include this session in the matching procedure (e.g. if imaging window is shifted too much)
-            if (c_max < self.params['min_session_correlation']) & \
-              (c_max_T < self.params['min_session_correlation']):
+            if (c_zscored < self.params['min_session_correlation_zscore']) & \
+                (c_zscored_T < self.params['min_session_correlation_zscore']):
+            # if (c_max < self.params['min_session_correlation']) & \
+            #   (c_max_T < self.params['min_session_correlation']):
                 print(f'Identified correlation {c_max} too low, skipping alignment, as sessions appear to have no common imaging window!')
-
-                return False, c_max
+                return False, remap
             
             if (c_max>0.95) | (c_max_T>0.95):
                 print(f'High correlation {c_max} found, skipping alignment as it is likely to be the same imaging data')
-                return False, c_max
+                return False, remap
             
 
             if (c_max_T > c_max) & (c_max_T > self.params['min_session_correlation']):
@@ -599,14 +598,15 @@ class matching:
                 remap['transposed'] = True
             
             ## calculate rigid shift and optical flow from reduced (cumulative) footprint arrays
-            remap['shift'],flow,remap['c_max'] = get_shift_and_flow(A_ref,self.A,self.params['dims'],projection=1,plot_bool=False)
+            remap['shift'],flow,remap['c_max'],remap['c_zscored'] = get_shift_and_flow(A_ref,self.A,self.params['dims'],projection=1,plot_bool=False)
+            # remap['shift'],flow,remap['c_max'],remap['c_zscored'] = get_shift_and_flow(Cn_ref,Cn,self.params['dims'],projection=None,plot_bool=False)
             remap['flow'][0,...] = flow[...,0]
             remap['flow'][1,...] = flow[...,1]
 
             total_shift = np.sum(np.sqrt(np.array([s**2 for s in remap['shift']]).sum()))
-            if total_shift > 20:
+            if total_shift > self.params['max_session_shift']:
                 print(f'Large shift {total_shift} identified, skipping alignment as sessions appear to have no significantly common imaging window!')
-                return False, c_max
+                return False, remap
 
             ## use shift and flow to align footprints - define reverse mapping
             x_remap,y_remap = build_remap_from_shift_and_flow(self.params['dims'],remap['shift'],remap['flow'] if use_opt_flow else None)
@@ -625,7 +625,31 @@ class matching:
         ## finally, apply normalization (watch out! changed normalization to /sum instead of /max)
         # self.A_ref = normalize_sparse_array(self.A_ref)
         self.A = normalize_sparse_array(self.A)
+        
         return True, remap
+    
+
+    def calculate_footprint_data(self,s):
+
+        ## calculating various statistics
+        self.data[s]['idx_eval'] &= (np.diff(self.A.indptr) != 0) ## finding non-empty rows in sparse array (https://mike.place/2015/sparse/)
+
+        # print('\n idx evals:',self.data[s]['idx_eval'].sum())
+        self.data[s]['nA'][0] = self.A.shape[1]    # number of neurons
+        self.data[s]['cm'] = center_of_mass(self.A,*self.params['dims'],convert=self.params['pxtomu'])
+
+        self.progress.set_description(f"Calculate self-referencing statistics for {self.paths['sessions'][s]}")
+
+        ## find and mark potential duplicates of neuron footprints in session
+        self.data_cross['D_ROIs'],self.data_cross['fp_corr'],idx_remove = calculate_statistics(
+            self.A,idx_eval=self.data[s]['idx_eval'],
+            SNR_comp=self.data[s]['SNR_comp'],C=self.data_tmp['C'],
+            binary=self.params['binary'],neighbor_distance=self.params['neighbor_distance'],convert=self.params['pxtomu'],model=self.params['correlation_model'],
+            dims=self.params['dims']
+        )
+        # print('\n idx remove:',idx_remove)
+        self.data[s]['idx_eval'][idx_remove] = False
+        self.data[s]['nA'][1] = self.data[s]['idx_eval'].sum()
 
 
     def update_joint_model(self,s,s_ref):

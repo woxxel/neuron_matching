@@ -94,7 +94,7 @@ def center_of_mass(A, d1, d2, d3=None,d1_offset=0,d2_offset=0,d3_offset=0,conver
   return np.array(cm)*convert
 
 
-def calculate_img_correlation(A1,A2,dims=(512,512),crop=False,cm_crop=None,binary=False,shift=True,plot_bool=False):
+def calculate_img_correlation(A1,A2,dims=(512,512),crop=False,cm_crop=None,binary=False,shift=True,plot_bool=False,printstuff=False):
 
   if shift:
 
@@ -148,8 +148,13 @@ def calculate_img_correlation(A1,A2,dims=(512,512),crop=False,cm_crop=None,binar
     #t_end = time.time()
     #print('corr-computation --- time taken: %5.3g'%(t_end-t_start))
     C_max = C.max()
+    C_zscored = (C_max-np.median(C))/np.std(C)
+
+    if printstuff:
+      print('max, z-score:',C_max,C_zscored)
+
     if np.isnan(C_max) | (C_max == 0):
-      return np.NaN, np.ones(2)*np.NaN
+      return np.NaN, np.NaN, np.ones(2)*np.NaN
 
     #if not crop:
     crop_half = ((dims[0]-np.mod(dims[0],2))/2,(dims[1]-np.mod(dims[1],2))/2)#tuple(int(d/2-1) for d in dims)
@@ -173,7 +178,7 @@ def calculate_img_correlation(A1,A2,dims=(512,512),crop=False,cm_crop=None,binar
       plt.suptitle('corr: %5.3g'%C_max)
       plt.show(block=False)
 
-    return C_max, img_shift # C[crop_half],
+    return C_max, C_zscored, img_shift # C[crop_half],
   else:
     #if not (type(A1) is np.ndarray):
       #A1 = A1.toarray()
@@ -205,7 +210,7 @@ def calculate_img_correlation(A1,A2,dims=(512,512),crop=False,cm_crop=None,binar
       #plt.colorbar()
       plt.suptitle('corr: %5.3g'%np.corrcoef(A1.flat,A2.flat)[0,1])
       plt.show(block=False)
-    return A1.multiply(A2).sum()/np.sqrt(A1.power(2).sum()*A2.power(2).sum()), None
+    return A1.multiply(A2).sum()/np.sqrt(A1.power(2).sum()*A2.power(2).sum()), None, None
     #return (A1*A2).sum()/np.sqrt((A1**2).sum()*(A2**2).sum()), None
     #return np.corrcoef(A1.flat,A2.flat)[0,1], None
 
@@ -224,19 +229,20 @@ def get_shift_and_flow(A1,A2,dims=(512,512),projection=-1,transpose_it=False,plo
   if transpose_it:
       A2 = A2.T
 
+
   A1 = normalize_array(A1,'uint',8)
   A2 = normalize_array(A2,'uint',8)
-
-  c,(y_shift,x_shift) = calculate_img_correlation(A1,A2,plot_bool=plot_bool)
+  c,c_zscored,(y_shift,x_shift) = calculate_img_correlation(A1,A2,plot_bool=plot_bool)
 
   x_remap,y_remap = build_remap_from_shift_and_flow(dims,(x_shift,y_shift))
 
   A2 = cv2.remap(A2, x_remap, y_remap, interpolation=cv2.INTER_CUBIC)
   A2 = normalize_array(A2,'uint',8)
+  # A2 = normalize_array(A2,'uint',8)
 
   flow = cv2.calcOpticalFlowFarneback(A1,A2,None,0.5,5,128,3,7,1.5,0)
 
-  return (x_shift,y_shift), flow, c
+  return (x_shift,y_shift), flow, c, c_zscored
 
 
 def build_remap_from_shift_and_flow(dims,shifts,flow=None):
@@ -265,8 +271,14 @@ def plot_flow(flow,dims,idxes=15):
     x_grid, y_grid = np.meshgrid(np.arange(0., dims[0]).astype(np.float32), np.arange(0., dims[1]).astype(np.float32))
 
     # print('shift:',[x_shift,y_shift])
+
+    scale = np.max(flow)/idxes
+
     plt.figure()
-    plt.quiver(x_grid[::idxes,::idxes], y_grid[::idxes,::idxes], flow[::idxes,::idxes,0], flow[::idxes,::idxes,1], angles='xy', scale_units='xy', scale=1, headwidth=4,headlength=4, width=0.002, units='width')
+    plt.quiver(x_grid[::idxes,::idxes], y_grid[::idxes,::idxes], 
+               flow[::idxes,::idxes,0], flow[::idxes,::idxes,1], 
+               angles='xy', scale_units='xy', 
+               scale=scale, headwidth=4,headlength=4, width=0.002, units='width')
     plt.show(block=False)
 
 
