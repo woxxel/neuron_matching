@@ -470,14 +470,21 @@ class matching:
 
         has_reference = False
         for s in self.data:
-            if s=='joint' or self.data[s]['skipped']: continue
+            print(s)
+
+            if s=='joint': continue
 
             if 'remap' in self.data[s].keys():
                 self.results['remap']['transposed'][s] = self.data[s]['remap']['transposed'] if has_reference else False
                 self.results['remap']['shift'][s,:] = self.data[s]['remap']['shift'] if has_reference else [0,0]
                 self.results['remap']['corr'][s] = self.data[s]['remap']['c_max'] if has_reference else 1
-                self.results['remap']['corr_zscored'][s] = self.data[s]['remap']['c_zscored'] if has_reference else 1
-
+                try:
+                    self.results['remap']['corr_zscored'][s] = self.data[s]['remap']['c_zscored'] if has_reference else 1
+                except:
+                    pass
+                
+            if self.data[s]['skipped']: continue
+            
             self.results['filePath'][s] = self.data[s]['filePath']
             
             idx_c = np.where(~np.isnan(self.results['assignments'][:,s]))[0]
@@ -555,6 +562,7 @@ class matching:
            'shift':     np.full((2,),np.NaN),
            'flow':      np.zeros((2,)+self.params['dims']),
            'c_max':     None,
+           'c_zscored': None, ## z-score of correlation
            'transposed':False,
         }
         
