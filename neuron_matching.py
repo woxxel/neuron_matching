@@ -478,10 +478,8 @@ class matching:
                 self.results['remap']['transposed'][s] = self.data[s]['remap']['transposed'] if has_reference else False
                 self.results['remap']['shift'][s,:] = self.data[s]['remap']['shift'] if has_reference else [0,0]
                 self.results['remap']['corr'][s] = self.data[s]['remap']['c_max'] if has_reference else 1
-                try:
-                    self.results['remap']['corr_zscored'][s] = self.data[s]['remap']['c_zscored'] if has_reference else 1
-                except:
-                    pass
+                self.results['remap']['corr_zscored'][s] = self.data[s]['remap']['c_zscored'] if has_reference else 1
+
                 
             if self.data[s]['skipped']: continue
             
@@ -561,8 +559,8 @@ class matching:
         remap = {
            'shift':     np.full((2,),np.NaN),
            'flow':      np.zeros((2,)+self.params['dims']),
-           'c_max':     None,
-           'c_zscored': None, ## z-score of correlation
+           'c_max':     np.NaN,
+           'c_zscored': np.NaN, ## z-score of correlation
            'transposed':False,
         }
         
