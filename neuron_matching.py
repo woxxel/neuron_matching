@@ -1953,7 +1953,8 @@ class matching:
 
     def plot_matches(self, s_ref, s,
         color_s_ref='coral',
-        color_s='lightgreen'):
+        color_s='lightgreen',
+        level=[0.05]):
     
         '''
 
@@ -2022,8 +2023,9 @@ class matching:
         
         A_ref, Cn[...,0] = load_and_align(s_ref)
         A, Cn[...,1] = load_and_align(s)
+
+        print(A.sum(axis=0))
         
-        level = [0.02]
         plt.figure(figsize=(15,12))
 
         ax_matches = plt.subplot(111)
