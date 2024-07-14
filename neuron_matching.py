@@ -2023,8 +2023,6 @@ class matching:
         
         A_ref, Cn[...,0] = load_and_align(s_ref)
         A, Cn[...,1] = load_and_align(s)
-
-        print(A.sum(axis=0))
         
         plt.figure(figsize=(15,12))
 
