@@ -20,13 +20,11 @@ from inspect import signature
 
 import scipy as sp
 from scipy import signal
-from scipy.io import loadmat
 from scipy.optimize import curve_fit, linear_sum_assignment
 import scipy.stats as sstats
 
 from matplotlib import pyplot as plt, rc, colors as mcolors, patches as mppatches, lines as mplines, cm
 
-from caiman.utils.utils import load_dict_from_hdf5
 from matplotlib.widgets import Slider
 
 from .utils import *
@@ -35,8 +33,7 @@ logging.basicConfig(level=logging.INFO)
 
 class matching:
 
-    def __init__(self,mousePath=None,paths=None,fileName_results='OnACID_results',suffix='',logLevel=logging.ERROR):
-        
+    def __init__(self,mousePath,paths=None,suffix='',matlab=False,logLevel=logging.ERROR):
         '''
             TODO:
                 * put match results into more handy shape:
@@ -46,17 +43,27 @@ class matching:
                     - p_same containing best and best_without_match value and being in results
         '''
 
+        self.matlab = matlab
         ## make sure suffix starts with '_'
         if suffix and suffix[0] != '_':
             suffix = '_' + suffix
         
-        fileName_results = fileName_results + suffix + '.hdf5'
-        if not mousePath:
-            mousePath = 'data/555wt'
-        if not paths:
-            ## create paths that should be processed
-            paths = [os.path.join(mousePath,sessionPath,fileName_results) for sessionPath in os.listdir(mousePath) if 'Session' in sessionPath]
-            paths.sort()
+        assert not (paths is None), 'You have to provide a list of paths to the CaImAn results files to be processed!'
+        # if not mousePath:
+        #     mousePath = 'data/555wt'
+        # if not paths:
+        #     ## create paths that should be processed
+        #     if fileName_results[-1] == '*':
+        #         paths = [
+        #             os.path.join(mousePath,sessionPath,os.path.splitext(fileName)[0] + suffix + ('.mat' if self.matlab else '.hdf5') ) 
+        #             for sessionPath in sorted(os.listdir(mousePath)) if sessionPath.startswith('Session') 
+        #             for fileName in os.listdir(os.path.join(mousePath,sessionPath)) if fileName.startswith(fileName_results[:-1])]
+        #     else:
+        #         paths = [
+        #             os.path.join(mousePath,sessionPath,os.path.splitext(fileName_results)[0] + suffix + ('.mat' if self.matlab else '.hdf5') ) 
+        #             for sessionPath in sorted(os.listdir(mousePath)) if 'Session' in sessionPath]
+        #     # paths.sort()
+        #     print(f'{paths=}')
 
         self.log = logging.getLogger("matchinglogger")
         self.log.setLevel(logLevel)
@@ -259,8 +266,13 @@ class matching:
     def dynamic_fit(self):
         times = 0
         while times<3:
-            self.fit_model(times=times)
-            if self.model['p_same']['which']=='joint':
+            try:
+                self.fit_model(times=times)
+                success = True
+            except:
+                success = False
+            
+            if success and self.model['p_same']['which']=='joint':
                 print(f'found proper fit @times={times}')
                 break
             times += 1
@@ -325,6 +337,9 @@ class matching:
         self.results['p_matched'][:,0,0] = 1
 
         for (s,self.currentPath) in self.progress:
+            if not self.currentPath:
+                continue
+
             session_name = os.path.dirname(self.paths['sessions'][s]).split('/')[-1]
             self.data[s] = copy.deepcopy(self.data_blueprint)
             self.data[s]['filePath'] = self.currentPath
@@ -338,7 +353,7 @@ class matching:
                 
             for s0 in range(s):
                 # self.progress.set_description('Calculate image correlations for Session %d'%s)
-                if ('Cn' in self.data[s0].keys()) and ('Cn' in self.data[s].keys()):
+                if (self.paths['sessions'][s0]) and ('Cn' in self.data[s0].keys()) and ('Cn' in self.data[s].keys()):
                     c_max,_,_ = calculate_img_correlation(self.data[s0]['Cn'],self.data[s]['Cn'],plot_bool=False)
                     self.results['Cn_corr'][s0,s] = self.results['Cn_corr'][s,s0] = c_max      
             
@@ -470,8 +485,6 @@ class matching:
 
         has_reference = False
         for s in self.data:
-            print(s)
-
             if s=='joint': continue
 
             if 'remap' in self.data[s].keys():
@@ -504,17 +517,9 @@ class matching:
           TODO:
             * implement min/max thresholding (maybe shift thresholding to other part of code?)
         '''
-        # print(loadPath)
-        ext = os.path.splitext(loadPath)[-1]  # obtain extension
-
-        if os.path.exists(loadPath):
-            if ext=='.hdf5':
-                ld = load_dict_from_hdf5(loadPath)    # function from CaImAn
-            elif ext=='.mat':
-                ld = loadmat(loadPath,squeeze_me=True)
-            else:
-                self.log.error('File extension not yet implemented for loading data!')
-                return False
+        
+        if loadPath and os.path.exists(loadPath):
+            ld = load_data(loadPath)
             
             if 'Cn' in ld.keys():
                 Cn = ld['Cn'].T
@@ -523,21 +528,22 @@ class matching:
                 Cn = np.array(ld['A'].sum(axis=1).reshape(*self.params['dims']))
             
             self.data_tmp['Cn'] = Cn
-            if s:
+            self.data_tmp['C'] = ld['C']
+
+            if not s is None:
                 self.data[s]['Cn'] = Cn
             
-            ## load some data necessary for further processing
-            self.data_tmp['C'] = ld['C']
-            if np.all([key in ld.keys() for key in ['SNR_comp','r_values','cnn_preds']]):
-                ## if evaluation parameters are present, use them to define used neurons
-                for key in ['SNR_comp','r_values','cnn_preds']:
-                    self.data[s][key] = ld[key]
+                ## load some data necessary for further processing
+                if np.all([key in ld.keys() for key in ['SNR_comp','r_values','cnn_preds']]):
+                    ## if evaluation parameters are present, use them to define used neurons
+                    for key in ['SNR_comp','r_values','cnn_preds']:
+                        self.data[s][key] = ld[key]
 
-                ## threshold neurons according to evaluation parameters
-                self.data[s]['idx_eval'] = ((ld['SNR_comp']>self.params['SNR_lowest']) & (ld['r_values']>self.params['rval_lowest']) & (ld['cnn_preds']>self.params['cnn_lowest'])) & ((ld['SNR_comp']>self.params['min_SNR']) | (ld['r_values']>self.params['rval_thr']) | (ld['cnn_preds']>self.params['min_cnn_thr']))
-            else:
-                ## else, use all neurons
-                self.data[s]['idx_eval'] = np.ones(ld['A'].shape[1],'bool')
+                    ## threshold neurons according to evaluation parameters
+                    self.data[s]['idx_eval'] = ((ld['SNR_comp']>self.params['SNR_lowest']) & (ld['r_values']>self.params['rval_lowest']) & (ld['cnn_preds']>self.params['cnn_lowest'])) & ((ld['SNR_comp']>self.params['min_SNR']) | (ld['r_values']>self.params['rval_thr']) | (ld['cnn_preds']>self.params['min_cnn_thr']))
+                else:
+                    ## else, use all neurons
+                    self.data[s]['idx_eval'] = np.ones(ld['A'].shape[1],'bool')
 
             return ld['A']
                 
@@ -600,7 +606,7 @@ class matching:
 
             if (c_max_T > c_max) & (c_max_T > self.params['min_session_correlation']):
                 print('Transposed image')
-                self.A = sp.sparse.hstack([img.reshape(self.params['dims']).transpose().reshape(-1,1) for img in self.A.transpose()])
+                self.A = sp.sparse.hstack([sp.sparse.csc_matrix(img.reshape(self.params['dims']).transpose().reshape(-1,1)) for img in self.A.transpose()])
                 remap['transposed'] = True
             
             ## calculate rigid shift and optical flow from reduced (cumulative) footprint arrays
@@ -636,6 +642,8 @@ class matching:
     
 
     def calculate_footprint_data(self,s):
+
+        # print(f'Session: {s}, A: {self.A.shape}')
 
         ## calculating various statistics
         self.data[s]['idx_eval'] &= (np.diff(self.A.indptr) != 0) ## finding non-empty rows in sparse array (https://mike.place/2015/sparse/)
@@ -1197,28 +1205,31 @@ class matching:
 
     ### -------------------- SAVING & LOADING ---------------------- ###
 
-    def save_model(self,suffix=''):
+    def save_model(self,suffix='',matlab=None):
         
         fix_suffix(suffix)
         pathMatching = os.path.join(self.paths['data'],'matching')
         if ~os.path.exists(pathMatching):
             os.makedirs(pathMatching,exist_ok=True)
 
-        pathSv = os.path.join(pathMatching,f'match_model{suffix}.pkl')
 
         results = {}
         for key in ['p_same','fit_parameter','pdf','counts','counts_unshifted','counts_same','counts_same_unshifted']:#,'f_same']:
             results[key] = self.model[key]
-        with open(pathSv,'wb') as f:
-            pickle.dump(results,f)
+        
+        pathSv = os.path.join(pathMatching,f'match_model{suffix}')
+        pathSv += '.mat' if (matlab is None and self.matlab) or matlab else '.pkl'
+        save_data(results,pathSv)
 
 
-    def load_model(self,suffix=''):
+    def load_model(self,suffix='',matlab=None):
         
         suffix = fix_suffix(suffix)
-        pathLd = os.path.join(self.paths['data'],f'matching/match_model{suffix}.pkl')
-        with open(pathLd,'rb') as f:
-            results = pickle.load(f)
+
+        pathLd = os.path.join(self.paths['data'],f'matching/match_model{suffix}')
+        pathLd += '.mat' if (matlab is None and self.matlab) or matlab else '.pkl'
+        results = load_data(pathLd)
+
         self.model = {}
         for key in results.keys():
             self.model[key] = results[key]
@@ -1229,39 +1240,37 @@ class matching:
         self.model['model_calculated'] = True
     
 
-    def save_registration(self,suffix=''):
+    def save_registration(self,suffix='',matlab=None):
         
         suffix = fix_suffix(suffix)
         pathMatching = os.path.join(self.paths['data'],'matching')
         if ~os.path.exists(pathMatching):
             os.makedirs(pathMatching,exist_ok=True)
         
-        pathSv = os.path.join(pathMatching,f'neuron_registration{suffix}.pkl')
-        with open(pathSv,'wb') as f:
-            # pickle.dump({'results':self.results,'data':self.data},f)
-            pickle.dump(self.results,f)
+        pathSv = os.path.join(pathMatching,f'neuron_registration{suffix}')
+        pathSv += '.mat' if (matlab is None and self.matlab) or matlab else '.pkl'
+        save_data(self.results,pathSv)
 
 
-    def save_data(self,suffix=''):
+    def save_data(self,suffix='',matlab=None):
 
         suffix = fix_suffix(suffix)
         pathMatching = os.path.join(self.paths['data'],'matching')
         if ~os.path.exists(pathMatching):
             os.makedirs(pathMatching,exist_ok=True)
 
-        pathSv = os.path.join(pathMatching,f'matching_data{suffix}.pkl')
-        with open(pathSv,'wb') as f:
-            pickle.dump(self.data,f)
+        pathSv = os.path.join(pathMatching,f'matching_data{suffix}')
+        pathSv += '.mat' if (matlab is None and self.matlab) or matlab else '.pkl'
+        save_data(self.data,pathSv)
 
 
-    def load_registration(self,suffix=''):
+    def load_registration(self,suffix='',matlab=None):
 
         suffix = fix_suffix(suffix)
-        pathLd = os.path.join(self.paths['data'],f'matching/neuron_registration{suffix}.pkl')
-        with open(pathLd,'rb') as f:
-            self.results = pickle.load(f)
-        # self.results = dataLd['results']
-        # self.data = dataLd['data']
+
+        pathLd = os.path.join(self.paths['data'],f'matching/neuron_registration{suffix}')
+        pathLd += '.mat' if (matlab is None and self.matlab) or matlab else '.pkl'
+        self.results = load_data(pathLd)
 
         self.paths['sessions'] = replace_relative_path(self.paths['sessions'],self.paths['data'])
         #try:
@@ -1269,14 +1278,26 @@ class matching:
         #except:
           #1
 
-    def load_data(self,suffix=''):
+    def load_data(self,suffix='',matlab=None):
 
         suffix = fix_suffix(suffix)
-        pathLd = os.path.join(self.paths['data'],f'matching/matching_data{suffix}.pkl')
-        with open(pathLd,'rb') as f:
-            self.data = pickle.load(f)
+
+        self.data = {}
+        if (matlab is None and self.matlab) or matlab:
+            pathLd = os.path.join(self.paths['data'],f'matching/matching_data{suffix}.mat')
+            dataLd = load_data(pathLd)
+            for key in dataLd.keys():
+                try:
+                    self.data[int(key)] = dataLd[key]
+                except:
+                    self.data[key] = dataLd[key]
+        else:
+            pathLd = os.path.join(self.paths['data'],f'matching/matching_data{suffix}.pkl')
+            with open(pathLd,'rb') as f:
+                self.data = pickle.load(f)
         # self.paths['sessions'] = replace_relative_path(self.paths['sessions'],self.paths['data'])
-        
+
+
 
     def find_confusion_candidates(self,confusion_distance=5):
        
@@ -1986,8 +2007,8 @@ class matching:
         t_start = time.time()
 
         def load_and_align(s):
-           
-            ld = load_dict_from_hdf5(self.paths['sessions'][s])
+            
+            ld = load_data(self.paths['sessions'][s])
             A = ld['A']
             Cn = ld['Cn'].T
 
@@ -2386,8 +2407,8 @@ class matching:
 
         n_close = self.results['assignments'][D_ROIs[c,:]<margins*1.5,s].astype('int')
 
-        print('load from %s'%self.paths['sessions'][s])
-        A = self.load_footprints(self.paths['sessions'][s],None)
+        print('load from %s'%self.paths['CaImAn_results'][s])
+        A = self.load_footprints(self.paths['CaImAn_results'][s],None)
         Cn = self.data_tmp['Cn']
         
         x,y = self.results['cm'][c,s,:].astype('int')
@@ -2430,7 +2451,7 @@ class matching:
         D_ROIs_cross = sp.spatial.distance.cdist(self.results['cm'][:,s,:],self.results['cm'][:,s+1,:])
         n_close = self.results['assignments'][D_ROIs_cross[c,:]<margins*2,s+1].astype('int')
 
-        A = self.load_footprints(self.paths['sessions'][s+1],None)
+        A = self.load_footprints(self.paths['CaImAn_results'][s+1],None)
         
         ## plot ROIs of session 2 compared to one of session 1
 
@@ -2632,8 +2653,8 @@ class matching:
         # pathSession1 = pathcat([cluster.meta['pathMouse'],'Session%02d/results_redetect.mat'%1])
         # ROIs1_ld = loadmat(pathSession1)
         s_ = 0
-        print(self.paths['sessions'][s_])
-        ROIs1_ld = load_dict_from_hdf5(self.paths['sessions'][s_])
+        print(self.paths['CaImAn_results'][s_])
+        ROIs1_ld = load_data(self.paths['CaImAn_results'][s_])
         print(ROIs1_ld.keys())
         Cn = np.array(ROIs1_ld['A'].sum(1).reshape(dims))
         # Cn = ROIs1_ld['Cn'].T
@@ -2737,7 +2758,7 @@ class matching:
                 # print('time (KS): %.3f'%(time.time()-t_start))
                 if s == s_compare:
 
-                    ROIs2_ld = load_dict_from_hdf5(self.paths['sessions'][s])
+                    ROIs2_ld = load_data(self.paths['CaImAn_results'][s])
 
                     Cn2 = np.array(ROIs2_ld['A'].sum(1).reshape(dims))
                     # Cn2 = ROIs2_ld['Cn'].T
@@ -3177,3 +3198,4 @@ def fix_suffix(suffix):
         if not suffix.startswith('_'):
             suffix = '_' + suffix
     return suffix
+

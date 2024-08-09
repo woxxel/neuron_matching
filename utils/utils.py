@@ -15,12 +15,111 @@
 
 import pickle, cv2, os, tqdm
 import scipy as sp
-from scipy import signal
+from scipy import signal, io as spio
+from caiman.utils.utils import load_dict_from_hdf5, save_dict_to_hdf5
+
 import numpy as np
 import matplotlib.pyplot as plt
 import h5py
 from typing import Any, Dict, List, Tuple, Union, Iterable
 
+
+def set_paths_default(
+        pathMouse='/usr/users/cidbn1/placefields/AlzheimerMice_Hayashi/556wt',
+        pathRecordings=None,
+        fileName_in='results_CaImAn*',
+        fileType='.hdf5',
+        imageType='.tif',
+		exclude='xyzabc',
+        suffix=''):
+	'''
+		Function to set default paths for neuron detection and matching, assuming a
+		folder structure with files arranged in separate Session folders
+
+		setting paths for
+			- results of neuron detection
+			- recording images (files or folder)
+			- 
+	'''
+
+	## make sure suffix starts with '_'
+	if suffix and suffix[0] != '_':
+		suffix = '_' + suffix
+
+
+	if not fileType.startswith('.'):
+		fileType = '.' + fileType
+
+	# pathMouse = os.path.join(path_processed,dataset,mouse)
+
+	# first, find list of session paths
+	pathsSession = sorted([os.path.join(pathMouse,sessionName) for sessionName in os.listdir(pathMouse) if os.path.isdir(os.path.join(pathMouse,sessionName)) and sessionName.startswith('Session')])
+
+    
+	## find list of paths to CaImAn results
+	pathsResults_tmp = [os.path.join(pathSession,fname) for pathSession in pathsSession for fname in os.listdir(pathSession) if (fname.startswith(fileName_in[:-1] if fileName_in[-1]=='*' else fileName_in) and os.path.splitext(fname)[1] == fileType and os.path.splitext(fname)[0].endswith(suffix) and not exclude in fname)]
+
+	pathsResults = []
+
+	## find paths to image files
+	# pathsMouse_images = os.path.join(path_images,dataset,mouse)
+
+	if pathRecordings:
+		pathsSession_images = sorted([os.path.join(pathRecordings,sessionName) for sessionName in os.listdir(pathRecordings) if os.path.isdir(os.path.join(pathRecordings,sessionName)) and sessionName.startswith('Session')])
+
+		pathsImages_tmp = [os.path.join(pathSession,fname) for pathSession in pathsSession_images for fname in os.listdir(pathSession) if ((os.path.isdir(fname) and fname=='images') if imageType=='folder' else fname.endswith(imageType))]
+
+    	## rebuild lists to match each session and to fill missing ones with False
+		pathsImages = []
+    
+	for session in pathsSession:
+
+		if pathRecordings:
+			matchImages = [pathImg for pathImg in pathsImages_tmp if (os.path.split(session)[1] in pathImg)]
+			pathsImages.append(matchImages[0] if len(matchImages) else False)
+
+		matchResults = [pathRes for pathRes in pathsResults_tmp if (os.path.split(session)[1] in pathRes)]
+		pathsResults.append(matchResults[0] if len(matchResults) else False)
+
+	if pathRecordings:
+		return pathsSession, pathsResults, pathsImages
+	else:
+		return pathsSession, pathsResults
+		
+
+def load_data(loadPath):
+
+    ext = os.path.splitext(loadPath)[1]
+    if ext=='.hdf5':
+        ld = load_dict_from_hdf5(loadPath)    # function from CaImAn
+    elif ext=='.pkl':
+        with open(loadPath,'rb') as f:
+            ld = pickle.load(f)
+    elif ext=='.mat':
+        ld = loadmat(loadPath)
+    else:
+        assert False, 'File extension not yet implemented for loading data!'
+    return ld
+
+def save_data(data,savePath):
+
+	ext = os.path.splitext(savePath)[1]
+	if ext=='.hdf5':
+		save_dict_to_hdf5(savePath,data)    # function from CaImAn
+	elif ext=='.pkl':
+		with open(savePath,'wb') as f:
+			pickle.dump(data,f)
+	elif ext=='.mat':
+		sv_data = {}
+		for key in data:
+			sv_data[str(key)] = data[key]
+			if isinstance(data[key],dict):
+				for keyy in data[key]:
+					if data[key][keyy] is None:
+						sv_data[str(key)][keyy] = np.array([])
+		spio.savemat(savePath,sv_data)
+	else:
+		assert False, 'File extension not yet implemented for saving data!'
 
 
 def pickleData(dat,path,mode='load',prnt=True):
@@ -348,6 +447,45 @@ def fun_wrapper(fun,x,p):
 
 
 def replace_relative_path(paths,newPath):
-    prepath = os.path.commonpath(paths)
-    return [os.path.join(newPath,os.path.relpath(path,prepath)) for path in paths]
+    paths_cleaned = [path for path in paths if path]
+    prepath = os.path.commonpath(paths_cleaned)
+    return [os.path.join(newPath,os.path.relpath(path,prepath)) if path else path for path in paths]
 
+
+def loadmat(filename):
+    '''
+    this function should be called instead of direct spio.loadmat
+    as it cures the problem of not properly recovering python dictionaries
+    from mat files. It calls the function check keys to cure all entries
+    which are still mat-objects
+    '''
+    data = spio.loadmat(filename, struct_as_record=False, squeeze_me=True)
+    
+    ### get rid of some unnecessary entries
+    for key in ['__header__','__version__','__globals__']:
+        del data[key]
+    
+    return _check_keys(data)
+
+def _check_keys(dict):
+    '''
+    checks if entries in dictionary are mat-objects. If yes
+    todict is called to change them to nested dictionaries
+    '''
+    for key in dict:
+        if isinstance(dict[key], spio.matlab.mio5_params.mat_struct):
+            dict[key] = _todict(dict[key])
+    return dict        
+
+def _todict(matobj):
+    '''
+    A recursive function which constructs from matobjects nested dictionaries
+    '''
+    dict = {}
+    for strg in matobj._fieldnames:
+        elem = matobj.__dict__[strg]
+        if isinstance(elem, spio.matlab.mio5_params.mat_struct):
+            dict[strg] = _todict(elem)
+        else:
+            dict[strg] = elem
+    return dict
