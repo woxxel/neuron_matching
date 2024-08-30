@@ -596,11 +596,11 @@ class matching:
                 (c_zscored_T < self.params['min_session_correlation_zscore']):
             # if (c_max < self.params['min_session_correlation']) & \
             #   (c_max_T < self.params['min_session_correlation']):
-                print(f'Identified correlation {c_max} too low, skipping alignment, as sessions appear to have no common imaging window!')
+                print(f'Identified correlation {c_max} too low in session {self.currentPath}, skipping alignment, as sessions appear to have no common imaging window!')
                 return False, remap
             
             if (c_max>0.95) | (c_max_T>0.95):
-                print(f'High correlation {c_max} found, skipping alignment as it is likely to be the same imaging data')
+                print(f'High correlation {c_max} found in session {self.currentPath}, skipping alignment as it is likely to be the same imaging data')
                 return False, remap
             
 
@@ -617,7 +617,7 @@ class matching:
 
             total_shift = np.sum(np.sqrt(np.array([s**2 for s in remap['shift']]).sum()))
             if total_shift > self.params['max_session_shift']:
-                print(f'Large shift {total_shift} identified, skipping alignment as sessions appear to have no significantly common imaging window!')
+                print(f'Large shift {total_shift} identified in session {self.currentPath}, skipping alignment as sessions appear to have no significantly common imaging window!')
                 return False, remap
 
             ## use shift and flow to align footprints - define reverse mapping
