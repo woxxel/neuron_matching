@@ -109,35 +109,6 @@ class matching:
             'neurons_matched': False,
         }
 
-        # ## defines the functions to fit to the count histograms for calculation of p_same
-        # self.model['fit_functions'] = {
-           
-        #     ## for the single model
-        #     'single': {
-        #         'distance': {
-        #           'NN':   'lognorm',
-        #           'nNN':  'linear_sigmoid',
-        #         },
-        #         'correlation': {
-        #           'NN':   'lognorm_reverse',
-        #           'nNN':  ['gauss','beta'], 
-        #         }
-        #       },
-
-        #     ## for the joint model
-        #     'joint': {
-        #         'distance': {
-        #           'NN':   'lognorm',
-        #           'nNN':  'gauss'
-        #         },
-        #         'correlation': {
-        #           'NN':   'lognorm_reverse',
-        #           'nNN':  'gauss'
-        #         }
-        #       }
-        #   }
-
-
     
     def update_bins(self,nbins):
         
@@ -312,9 +283,11 @@ class matching:
                 continue
             else:
                 break
+
+        
         self.progress = tqdm.tqdm(enumerate(self.paths['sessions'][s+1:],start=s+1),total=self.nS-(s+1),leave=True)
         
-        self.prepare_footprints(align_to_reference=False)
+        prepared, self.data[s]['remap'] = self.prepare_footprints(align_to_reference=False)
         self.calculate_footprint_data(s)
         
         self.Cn_ref = self.data_tmp['Cn']
@@ -355,8 +328,8 @@ class matching:
                 # self.progress.set_description('Calculate image correlations for Session %d'%s)
                 if (self.paths['sessions'][s0]) and ('Cn' in self.data[s0].keys()) and ('Cn' in self.data[s].keys()):
                     c_max,_,_ = calculate_img_correlation(self.data[s0]['Cn'],self.data[s]['Cn'],plot_bool=False)
-                    self.results['Cn_corr'][s0,s] = self.results['Cn_corr'][s,s0] = c_max      
-            
+                    self.results['Cn_corr'][s0,s] = self.results['Cn_corr'][s,s0] = c_max
+                    
             self.progress.set_description(f"A union size: {self.data['joint']['nA'][0]}, Preparing footprints from {session_name}")
 
             ## preparing data of current session
@@ -485,13 +458,14 @@ class matching:
 
         has_reference = False
         for s in self.data:
+            print(s,has_reference)
             if s=='joint': continue
 
             if 'remap' in self.data[s].keys():
                 self.results['remap']['transposed'][s] = self.data[s]['remap']['transposed'] if has_reference else False
                 self.results['remap']['shift'][s,:] = self.data[s]['remap']['shift'] if has_reference else [0,0]
                 self.results['remap']['corr'][s] = self.data[s]['remap']['c_max'] if has_reference else 1
-                self.results['remap']['corr_zscored'][s] = self.data[s]['remap']['c_zscored'] if has_reference else 1
+                self.results['remap']['corr_zscored'][s] = self.data[s]['remap']['c_zscored'] if has_reference else np.inf
 
                 
             if self.data[s]['skipped']: continue
@@ -530,7 +504,7 @@ class matching:
             self.data_tmp['Cn'] = Cn
             self.data_tmp['C'] = ld['C']
 
-            if not s is None:
+            if not (s is None):
                 self.data[s]['Cn'] = Cn
             
                 ## load some data necessary for further processing
@@ -603,7 +577,7 @@ class matching:
                 print(f'High correlation {c_max} found in session {self.currentPath}, skipping alignment as it is likely to be the same imaging data')
                 return False, remap
             
-
+            
             if (c_max_T > c_max) & (c_max_T > self.params['min_session_correlation']):
                 print('Transposed image')
                 self.A = sp.sparse.hstack([sp.sparse.csc_matrix(img.reshape(self.params['dims']).transpose().reshape(-1,1)) for img in self.A.transpose()])
@@ -1272,7 +1246,7 @@ class matching:
         pathLd += '.mat' if (matlab is None and self.matlab) or matlab else '.pkl'
         self.results = load_data(pathLd)
 
-        self.paths['sessions'] = replace_relative_path(self.paths['sessions'],self.paths['data'])
+        # self.paths['sessions'] = replace_relative_path(self.paths['sessions'],self.paths['data'])
         #try:
           #self.results['assignments'] = self.results['assignment']
         #except:

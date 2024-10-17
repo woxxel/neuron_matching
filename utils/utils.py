@@ -30,7 +30,7 @@ def set_paths_default(
         fileName_in='results_CaImAn*',
         fileType='.hdf5',
         imageType='.tif',
-		exclude='xyzabc',
+		    exclude='xyzabc',
         suffix=''):
 	'''
 		Function to set default paths for neuron detection and matching, assuming a
@@ -105,7 +105,7 @@ def save_data(data,savePath):
 
 	ext = os.path.splitext(savePath)[1]
 	if ext=='.hdf5':
-		save_dict_to_hdf5(savePath,data)    # function from CaImAn
+		save_dict_to_hdf5(data,savePath)    # function from CaImAn
 	elif ext=='.pkl':
 		with open(savePath,'wb') as f:
 			pickle.dump(data,f)
