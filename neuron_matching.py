@@ -604,7 +604,7 @@ class matching:
                     for key in ["SNR_comp", "r_values", "cnn_preds"]:
                         self.data[s][key] = ld[key]
 
-                    ## threshold neurons according to evaluation parameters
+                    ## threshold neurons according to evaluation parameters (SNR, r_values, cnn_preds)
                     self.data[s]["idx_eval"] = (
                         (ld["SNR_comp"] > self.params["SNR_lowest"])
                         & (ld["r_values"] > self.params["rval_lowest"])
