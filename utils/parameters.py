@@ -16,12 +16,14 @@ matching_params = {
     # 'SNR_thr':      2.,         # signal-to-noise ratio
     # 'r_thr':        0.5,        # r_value
     # 'CNN_thr':      0.6,        # cnn-classifier value
+    
     "SNR_lowest": 1.0,
     "SNR_min": 2.5,
     "rval_lowest": -1,
     "rval_min": 0.8,
     "cnn_lowest": 0.1,
     "cnn_min": 0.9,
+
     "min_session_correlation": 0.0,  # minimum value of correlation between session footprints to include data in matching
     "min_session_correlation_zscore": 3.0,  # minimum value of correlation between session footprints to include data in matching
     "max_session_shift": 100,  # maximum shift between sessions to consider for matching

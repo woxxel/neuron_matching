@@ -610,9 +610,9 @@ class matching:
                         & (ld["r_values"] > self.params["rval_lowest"])
                         & (ld["cnn_preds"] > self.params["cnn_lowest"])
                     ) & (
-                        (ld["SNR_comp"] > self.params["min_SNR"])
-                        | (ld["r_values"] > self.params["rval_thr"])
-                        | (ld["cnn_preds"] > self.params["min_cnn_thr"])
+                        (ld["SNR_comp"] > self.params["SNR_min"])
+                        | (ld["r_values"] > self.params["rval_min"])
+                        | (ld["cnn_preds"] > self.params["cnn_min"])
                     )
                 else:
                     ## else, use all neurons
