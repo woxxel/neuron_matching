@@ -54,13 +54,16 @@ def set_paths_default(
 
     # pathMouse = os.path.join(path_processed,dataset,mouse)
 
+    get_session_ID = lambda x: int("".join([i for i in list(x.name) if i.isdigit()]))
+    # sorted(a,key=get_session_ID)
     # first, find list of session paths
     pathsSession = sorted(
         [
             pathSession
             for pathSession in pathMouse.iterdir()
             if pathSession.is_dir() and pathSession.name.startswith("Session")
-        ]
+        ],
+        key=get_session_ID,
     )
 
     ## find list of paths to CaImAn results
@@ -88,7 +91,8 @@ def set_paths_default(
                 pathSession
                 for pathSession in pathRecordings.iterdir()
                 if pathSession.is_dir() and pathSession.name.startswith("Session")
-            ]
+            ],
+            key=get_session_ID,
         )
 
         pathsImages_tmp = [
