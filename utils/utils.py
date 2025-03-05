@@ -22,6 +22,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import h5py
 from typing import Any, Dict, List, Tuple, Union, Iterable
+from pathlib import Path
 
 
 def set_paths_default(
@@ -32,60 +33,98 @@ def set_paths_default(
         imageType='.tif',
 		    exclude='xyzabc',
         suffix=''):
-	'''
-		Function to set default paths for neuron detection and matching, assuming a
-		folder structure with files arranged in separate Session folders
+    """
+    Function to set default paths for neuron detection and matching, assuming a
+    folder structure with files arranged in separate Session folders
 
-		setting paths for
-			- results of neuron detection
-			- recording images (files or folder)
-			- 
-	'''
+    setting paths for
+    - results of neuron detection
+    - recording images (files or folder)
+    -
+    """
+    pathMouse = Path(pathMouse)
 
-	## make sure suffix starts with '_'
-	if suffix and suffix[0] != '_':
-		suffix = '_' + suffix
+    ## make sure suffix starts with '_'
+    if suffix and suffix[0] != "_":
+        suffix = "_" + suffix
 
+    if not fileType.startswith("."):
+        fileType = "." + fileType
 
-	if not fileType.startswith('.'):
-		fileType = '.' + fileType
+    # pathMouse = os.path.join(path_processed,dataset,mouse)
 
-	# pathMouse = os.path.join(path_processed,dataset,mouse)
+    # first, find list of session paths
+    pathsSession = sorted(
+        [
+            pathSession
+            for pathSession in pathMouse.iterdir()
+            if pathSession.is_dir() and pathSession.name.startswith("Session")
+        ]
+    )
 
-	# first, find list of session paths
-	pathsSession = sorted([os.path.join(pathMouse,sessionName) for sessionName in os.listdir(pathMouse) if os.path.isdir(os.path.join(pathMouse,sessionName)) and sessionName.startswith('Session')])
+    ## find list of paths to CaImAn results
+    pathsResults_tmp = [
+        pathFile
+        for pathSession in pathsSession
+        for pathFile in pathSession.iterdir()
+        if (
+            pathFile.name.startswith(
+                fileName_in[:-1] if fileName_in[-1] == "*" else fileName_in
+            )
+            and os.path.splitext(pathFile.name)[1] == fileType
+            and os.path.splitext(pathFile.name)[0].endswith(suffix)
+            and not exclude in pathFile.name
+        )
+    ]
 
-    
-	## find list of paths to CaImAn results
-	pathsResults_tmp = [os.path.join(pathSession,fname) for pathSession in pathsSession for fname in os.listdir(pathSession) if (fname.startswith(fileName_in[:-1] if fileName_in[-1]=='*' else fileName_in) and os.path.splitext(fname)[1] == fileType and os.path.splitext(fname)[0].endswith(suffix) and not exclude in fname)]
+    pathsResults = []
 
-	pathsResults = []
+    ## find paths to image files
+    # pathsMouse_images = os.path.join(path_images,dataset,mouse)
 
-	## find paths to image files
-	# pathsMouse_images = os.path.join(path_images,dataset,mouse)
+    if pathRecordings:
+        pathRecordings = Path(pathRecordings)
+        pathsSession_images = sorted(
+            [
+                pathSession
+                for pathSession in pathRecordings.iterdir()
+                if pathSession.is_dir() and pathSession.name.startswith("Session")
+            ]
+        )
 
-	if pathRecordings:
-		pathsSession_images = sorted([os.path.join(pathRecordings,sessionName) for sessionName in os.listdir(pathRecordings) if os.path.isdir(os.path.join(pathRecordings,sessionName)) and sessionName.startswith('Session')])
+        pathsImages_tmp = [
+            pathFile
+            for pathSession in pathsSession_images
+            for pathFile in pathSession.iterdir()
+            if (
+                (pathFile.is_dir() and pathFile.name == "images")
+                if imageType == "folder"
+                else pathFile.name.endswith(imageType)
+            )
+        ]
 
-		pathsImages_tmp = [os.path.join(pathSession,fname) for pathSession in pathsSession_images for fname in os.listdir(pathSession) if ((os.path.isdir(fname) and fname=='images') if imageType=='folder' else fname.endswith(imageType))]
+        ## rebuild lists to match each session and to fill missing ones with False
+        pathsImages = []
 
-    	## rebuild lists to match each session and to fill missing ones with False
-		pathsImages = []
-    
-	for session in pathsSession:
+    for session in pathsSession:
+        if pathRecordings:
+            matchImages = [
+                pathImg
+                for pathImg in pathsImages_tmp
+                if pathImg.is_relative_to(session)
+            ]
+            pathsImages.append(matchImages[0] if len(matchImages) else False)
 
-		if pathRecordings:
-			matchImages = [pathImg for pathImg in pathsImages_tmp if (os.path.split(session)[1] in pathImg)]
-			pathsImages.append(matchImages[0] if len(matchImages) else False)
+        matchResults = [
+            pathRes for pathRes in pathsResults_tmp if pathRes.is_relative_to(session)
+        ]
+        pathsResults.append(matchResults[0] if len(matchResults) else False)
 
-		matchResults = [pathRes for pathRes in pathsResults_tmp if (os.path.split(session)[1] in pathRes)]
-		pathsResults.append(matchResults[0] if len(matchResults) else False)
+    if pathRecordings:
+        return pathsSession, pathsResults, pathsImages
+    else:
+        return pathsSession, pathsResults
 
-	if pathRecordings:
-		return pathsSession, pathsResults, pathsImages
-	else:
-		return pathsSession, pathsResults
-		
 
 def load_data(loadPath):
 
@@ -140,9 +179,9 @@ def pickleData(dat,path,mode='load',prnt=True):
 
 
 def replace_relative_path(paths,newPath):
-            prepath = os.path.commonpath(paths)
-            return [os.path.join(newPath,os.path.relpath(path,prepath)) for path in paths]
-        
+    prepath = os.path.commonpath(paths)
+    return [os.path.join(newPath, os.path.relpath(path, prepath)) for path in paths]
+
 
 def load_field_from_hdf5(filePath,field):
 
@@ -406,19 +445,18 @@ def normalize_sparse_array(A,relative_threshold=0.001,minimum_nonzero_entries=50
 
 
 def nangauss_filter(X,sigma=None,mode='nearest',truncate=2):
-  if (sigma is None) or not np.any(np.array(sigma)>0):
-    return X
-  else:
-    V = X.copy()
-    V[np.isnan(X)] = 0
-    VV = sp.ndimage.gaussian_filter(V,sigma,truncate=truncate,mode=mode)
+    if (sigma is None) or not np.any(np.array(sigma) > 0):
+        return X
+    else:
+        V = X.copy()
+        V[np.isnan(X)] = 0
+        VV = sp.ndimage.gaussian_filter(V, sigma, truncate=truncate, mode=mode)
 
-    W = 0*X.copy()+1
-    W[np.isnan(X)] = 0
-    WW = sp.ndimage.gaussian_filter(W,sigma,truncate=truncate,mode=mode)
+        W = 0 * X.copy() + 1
+        W[np.isnan(X)] = 0
+        WW = sp.ndimage.gaussian_filter(W, sigma, truncate=truncate, mode=mode)
 
-  return VV/WW
-
+    return VV / WW
 
 
 def nanmedian_filter(X,footprint=None,mode='nearest'):
