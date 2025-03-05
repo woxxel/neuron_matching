@@ -26,13 +26,14 @@ from pathlib import Path
 
 
 def set_paths_default(
-        pathMouse='/usr/users/cidbn1/placefields/AlzheimerMice_Hayashi/556wt',
-        pathRecordings=None,
-        fileName_in='results_CaImAn*',
-        fileType='.hdf5',
-        imageType='.tif',
-		    exclude='xyzabc',
-        suffix=''):
+    pathMouse="/usr/users/cidbn1/placefields/AlzheimerMice_Hayashi/556wt",
+    pathRecordings=None,
+    fileName_in="results_CaImAn*",
+    fileType=".hdf5",
+    imageType=".tif",
+    exclude="xyzabc",
+    suffix="",
+):
     """
     Function to set default paths for neuron detection and matching, assuming a
     folder structure with files arranged in separate Session folders
@@ -80,8 +81,6 @@ def set_paths_default(
     pathsResults = []
 
     ## find paths to image files
-    # pathsMouse_images = os.path.join(path_images,dataset,mouse)
-
     if pathRecordings:
         pathRecordings = Path(pathRecordings)
         pathsSession_images = sorted(
@@ -105,15 +104,21 @@ def set_paths_default(
 
         ## rebuild lists to match each session and to fill missing ones with False
         pathsImages = []
+        iterSessions = zip(pathsSession, pathsSession_images)
+    else:
+        iterSessions = pathsSession
 
-    for session in pathsSession:
+    for this_session in iterSessions:
         if pathRecordings:
+            session, session_image = this_session
             matchImages = [
                 pathImg
                 for pathImg in pathsImages_tmp
-                if pathImg.is_relative_to(session)
+                if pathImg.is_relative_to(session_image)
             ]
             pathsImages.append(matchImages[0] if len(matchImages) else False)
+        else:
+            session = this_session
 
         matchResults = [
             pathRes for pathRes in pathsResults_tmp if pathRes.is_relative_to(session)
