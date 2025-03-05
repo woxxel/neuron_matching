@@ -71,7 +71,7 @@ def set_paths_default(
             pathFile.name.startswith(
                 fileName_in[:-1] if fileName_in[-1] == "*" else fileName_in
             )
-            and os.path.splitext(pathFile.name)[1] == fileType
+            and pathFile.suffix == fileType
             and os.path.splitext(pathFile.name)[0].endswith(suffix)
             and not exclude in pathFile.name
         )
@@ -99,7 +99,7 @@ def set_paths_default(
             if (
                 (pathFile.is_dir() and pathFile.name == "images")
                 if imageType == "folder"
-                else pathFile.name.endswith(imageType)
+                else pathFile.suffix == imageType
             )
         ]
 
