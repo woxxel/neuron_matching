@@ -555,10 +555,11 @@ class matching:
                     self.data[s]["remap"]["c_zscored"] if has_reference else np.inf
                 )
 
+            if "filePath" in self.data[s].keys():
+                self.results["filePath"][s] = self.data[s]["filePath"]
+
             if self.data[s]["skipped"]:
                 continue
-
-            self.results["filePath"][s] = self.data[s]["filePath"]
 
             idx_c = np.where(~np.isnan(self.results["assignments"][:, s]))[0]
             idx_n = self.results["assignments"][idx_c, s].astype("int")
